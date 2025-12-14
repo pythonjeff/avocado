@@ -1,0 +1,2 @@
+[console_scripts]
+ai-options-trader = ai_options_trader.cli:app
