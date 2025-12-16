@@ -93,9 +93,9 @@ def macro_snapshot(
     state = build_macro_state(settings=settings, start_date=start, refresh=refresh)
     print(state)
     regime = classify_macro_regime(
-    inflation_momentum_minus_be=state.inputs.inflation_momentum_minus_be5y,
-    real_yield=state.inputs.real_yield_proxy_10y,
-)
+        inflation_momentum_minus_be=state.inputs.inflation_momentum_minus_be5y,
+        real_yield=state.inputs.real_yield_proxy_10y,
+    )
 
     print("\nMACRO REGIME")
     print(regime)
@@ -227,6 +227,122 @@ def macro_beta_adjusted_sensitivity(
     result = pd.concat(tables, axis=1).T
     print(result)
 
+
+@app.command("regimes")
+def regimes(
+    start: str = typer.Option("2016-01-01", "--start", help="Start date YYYY-MM-DD"),
+    refresh: bool = typer.Option(False, "--refresh", help="Force refresh FRED downloads"),
+    benchmark: str = typer.Option("XLY", "--benchmark", help="Sector or market benchmark (e.g., XLY, SPY)"),
+    baskets: str = typer.Option(
+        "all",
+        "--baskets",
+        help="Comma-separated basket names, or 'all' (see: ai-options-trader tariff baskets)",
+    ),
+    llm: bool = typer.Option(False, "--llm", help="Ask an LLM to summarize regimes + follow-ups"),
+    llm_model: str = typer.Option("", "--llm-model", help="Override OPENAI_MODEL (optional)"),
+    llm_temperature: float = typer.Option(0.2, "--llm-temperature", help="LLM temperature (0..2)"),
+):
+    """
+    Print the current macro regime and all tariff/cost-push regimes (by basket).
+    """
+    from ai_options_trader.data.fred import FredClient
+    from ai_options_trader.data.market import fetch_equity_daily_closes
+    from ai_options_trader.tariff.universe import BASKETS
+    from ai_options_trader.tariff.proxies import DEFAULT_COST_PROXY_SERIES
+    from ai_options_trader.tariff.signals import build_tariff_regime_state
+
+    settings = load_settings()
+
+    # --- Macro ---
+    macro_state = build_macro_state(settings=settings, start_date=start, refresh=refresh)
+    print(macro_state)
+    macro_regime = classify_macro_regime(
+        inflation_momentum_minus_be=macro_state.inputs.inflation_momentum_minus_be5y,
+        real_yield=macro_state.inputs.real_yield_proxy_10y,
+    )
+    print("\nMACRO REGIME")
+    print(macro_regime)
+
+    # --- Tariff baskets selection ---
+    if baskets.strip().lower() == "all":
+        basket_names = list(BASKETS.keys())
+    else:
+        basket_names = [b.strip() for b in baskets.split(",") if b.strip()]
+
+    unknown = [b for b in basket_names if b not in BASKETS]
+    if unknown:
+        raise typer.BadParameter(f"Unknown basket(s): {unknown}. Choose from: {list(BASKETS.keys())}")
+
+    # --- Cost proxies (FRED) fetched once ---
+    if not settings.FRED_API_KEY:
+        raise RuntimeError("Missing FRED_API_KEY in environment / .env")
+    fred = FredClient(api_key=settings.FRED_API_KEY)
+
+    frames = []
+    for col, sid in DEFAULT_COST_PROXY_SERIES.items():
+        df = fred.fetch_series(sid, start_date=start, refresh=refresh)
+        df = df.rename(columns={"value": col}).set_index("date")
+        frames.append(df[[col]])
+    cost_df = pd.concat(frames, axis=1).sort_index().resample("D").ffill()
+
+    # --- Equities (Alpaca) fetched once ---
+    all_universe = sorted({sym for b in basket_names for sym in BASKETS[b].tickers})
+    symbols = sorted(set(all_universe + [benchmark.strip().upper()]))
+    px = fetch_equity_daily_closes(
+        api_key=settings.ALPACA_DATA_KEY or settings.ALPACA_API_KEY,
+        api_secret=settings.ALPACA_DATA_SECRET or settings.ALPACA_API_SECRET,
+        symbols=symbols,
+        start=start,
+    )
+    px = px.sort_index().ffill().dropna(how="all")
+
+    print("\nTARIFF / COST-PUSH REGIMES")
+    tariff_results = []
+    for b in basket_names:
+        basket = BASKETS[b]
+        print(f"\n[b]{basket.name}[/b] — {basket.description}")
+        state = build_tariff_regime_state(
+            cost_df=cost_df,
+            equity_prices=px,
+            universe=basket.tickers,
+            benchmark=benchmark,
+            basket_name=basket.name,
+            start_date=start,
+        )
+        print(state)
+        tariff_results.append(
+            {
+                "basket": basket.name,
+                "description": basket.description,
+                "benchmark": benchmark,
+                "state": state,
+            }
+        )
+
+    if llm:
+        from ai_options_trader.llm.regime_summary import llm_regime_summary
+
+        print("\nLLM SUMMARY")
+        summary = llm_regime_summary(
+            settings=settings,
+            macro_state=macro_state,
+            macro_regime=macro_regime,
+            tariff_regimes=tariff_results,
+            model=llm_model.strip() or None,
+            temperature=float(llm_temperature),
+        )
+        print(summary)
+
+
+@tariff_app.command("baskets")
+def tariff_baskets():
+    """List available tariff baskets."""
+    from ai_options_trader.tariff.universe import BASKETS
+
+    for name, b in BASKETS.items():
+        print(f"- {name}: {b.description} (tickers={','.join(b.tickers)})")
+
+
 @tariff_app.command("snapshot")
 def tariff_snapshot(
     basket: str = typer.Option("import_retail_apparel", "--basket"),
@@ -237,14 +353,13 @@ def tariff_snapshot(
     """
     Compute tariff/cost-push regime snapshot for an import-exposed basket.
     """
-    from ai_options_trader.config import Settings
     from ai_options_trader.data.fred import FredClient
     from ai_options_trader.data.market import fetch_equity_daily_closes
     from ai_options_trader.tariff.universe import BASKETS
     from ai_options_trader.tariff.proxies import DEFAULT_COST_PROXY_SERIES
     from ai_options_trader.tariff.signals import build_tariff_regime_state
 
-    settings = Settings()
+    settings = load_settings()
 
     if basket not in BASKETS:
         raise typer.BadParameter(f"Unknown basket: {basket}. Choose from: {list(BASKETS.keys())}")
@@ -268,8 +383,8 @@ def tariff_snapshot(
     # --- Equities (Alpaca) ---
     symbols = sorted(set(universe + [benchmark]))
     px = fetch_equity_daily_closes(
-        api_key=settings.ALPACA_API_KEY,
-        api_secret=settings.ALPACA_API_SECRET,
+        api_key=settings.ALPACA_DATA_KEY or settings.ALPACA_API_KEY,
+        api_secret=settings.ALPACA_DATA_SECRET or settings.ALPACA_API_SECRET,
         symbols=symbols,
         start=start,
     )

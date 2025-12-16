@@ -53,6 +53,36 @@ Avocado also computes a lightweight macro state and a simple “regime” label 
 avocado macro snapshot
 ```
 
+### Regime dashboard (macro + tariff baskets) + LLM summary
+
+Print **macro regime + tariff/cost-push regimes** across all baskets:
+
+```bash
+avocado regimes
+```
+
+See available tariff baskets:
+
+```bash
+avocado tariff baskets
+```
+
+Have an LLM read the regimes and produce a short **summary + risks + follow-up checklist**:
+
+```bash
+avocado regimes --llm
+```
+
+Notes:
+- **Data requirements**: tariff regimes require Alpaca **data** keys (or trading keys) + `FRED_API_KEY`.
+- **LLM requirements**: `OPENAI_API_KEY` (and optionally `OPENAI_MODEL` in `.env`).
+- **Optional overrides**:
+
+```bash
+avocado regimes --llm --llm-model gpt-4o-mini --llm-temperature 0.2
+avocado regimes --baskets import_retail_apparel,big_box_retail --benchmark XLY
+```
+
 ### Equity sensitivity (optional: “what drives this stock?”)
 
 Useful for deciding whether to structure spreads around rates / breakevens sensitivity.
