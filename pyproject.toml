@@ -1,5 +1,5 @@
 [project]
-name = "avocado"
+name = "lox"
 version = "0.1.0"
 description = "Execution-aware AI-assisted options selector using Alpaca."
 readme = "README.md"
@@ -19,6 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
+lox = "ai_options_trader.cli:app"
+# Back-compat alias (can be removed later)
 avocado = "ai_options_trader.cli:app"
 ai-options-trader = "ai_options_trader.cli:app"
 

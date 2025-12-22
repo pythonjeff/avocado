@@ -1,9 +1,9 @@
-## Avocado — systematic options idea generation & execution (Alpaca)
+## Lox — regime-aware options research & execution (Alpaca)
 
-**Avocado** is a research and execution CLI designed to turn a macro thesis into **tradeable options expressions**:
+**Lox** is a research + execution CLI designed to turn a macro thesis into **tradeable options expressions**, with an emphasis on:
 - **Regime-aware context** (macro + tariff/cost-push)
 - **Deterministic contract selection** (DTE / delta / spread / liquidity)
-- **Explainability** (why an idea exists, what inputs drove it, and what to check next)
+- **Explainability** (why an idea exists, what inputs drove it, what could invalidate, and what to watch next)
 - **Paper execution + tracking** (log recommendations, link executed orders, track P&L)
 
 **Important**: This is a research tool. Nothing here is financial advice. Use paper trading first.
@@ -16,48 +16,129 @@ pip install -e .
 cp .env.example .env
 ```
 
-Minimum environment:
+Minimum environment (by capability):
 - **Alpaca**: `ALPACA_API_KEY`, `ALPACA_API_SECRET` (and optionally `ALPACA_DATA_KEY`, `ALPACA_DATA_SECRET`)
-- **FRED**: `FRED_API_KEY` (for macro/tariff signals)
-- **LLM (optional)**: `OPENAI_API_KEY`, `OPENAI_MODEL`
-- **FMP (optional, recommended for news/calendar)**: `FMP_API_KEY`
+- **FRED**: `FRED_API_KEY` (for quantitative macro state/regimes)
+- **FMP**: `FMP_API_KEY` (for equity news + economic calendar)
+- **LLM**: `OPENAI_API_KEY` (and optional `OPENAI_MODEL`)
+
+Entry points:
+- Use `lox ...` (primary).
+- `avocado ...` is a compatibility alias and may be removed later.
 
 ## Core workflow (recommended)
 
 ### 1) Inspect regimes (macro + tariff) and optional LLM readout
 
 ```bash
-avocado regimes
-avocado regimes --llm
+lox regimes
+lox regimes --llm
 ```
 
 List available tariff baskets:
 
 ```bash
-avocado tariff baskets
+lox tariff baskets
 ```
 
 ### 2) Generate thesis-driven ideas (AI bubble / inflation / tariffs)
 
 ```bash
-avocado ideas ai-bubble --top 15
+lox ideas ai-bubble --top 15
 ```
 
 Pull option chains and select a liquid **starter leg** per idea:
 
 ```bash
-avocado ideas ai-bubble --with-legs --top 10 --target-dte 45
+lox ideas ai-bubble --with-legs --top 10 --target-dte 45
 ```
 
 ### 3) Review ideas one-by-one and optionally execute (paper)
 
 ```bash
-avocado ideas ai-bubble --interactive --with-legs --execute --top 10
+lox ideas ai-bubble --interactive --with-legs --execute --top 10
 ```
 
 Execution safety:
 - Orders are only sent when you confirm interactively
 - When `ALPACA_PAPER` is false, execution is refused
+
+## Macro & financial features (a “research note” view)
+
+This section is intentionally detailed: it’s a conceptual map of **what Lox measures**, **why those measurements exist**, and **how they turn into tradeable option legs**.
+
+### Macro state: what is measured (quantitative)
+`src/ai_options_trader/macro/signals.py` builds a daily macro dataset from a small set of FRED series and derives interpretable features:
+
+- **Inflation reality (CPI)**:
+  - CPI YoY, Core CPI YoY
+  - CPI 3-month annualized, CPI 6-month annualized (computed on monthly CPI observations then forward-filled)
+- **Inflation expectations (breakevens)**:
+  - 5y breakeven, 10y breakeven
+- **Rates & curve**:
+  - Effective Fed Funds
+  - 2y and 10y Treasury yields
+  - 2s10s curve slope
+- **Derived real-yield proxy**:
+  - \( \text{REAL\_YIELD\_PROXY\_10Y} = \text{DGS10} - \text{T10YIE} \)
+- **A key “inflation surprise / repricing” feature**:
+  - \( \text{INFL\_MOM\_MINUS\_BE5Y} = \text{CPI\_6M\_ANN} - \text{T5YIE} \)
+- **Composite disconnect score (z-scored)**:
+  - A weighted combination of z-scores of inflation momentum vs breakevens and the real-yield proxy
+
+Outputs are packaged into `MacroState` / `MacroInputs` (`src/ai_options_trader/macro/models.py`) so the CLI can print them, and the LLM can consume them as structured data.
+
+### Macro regime: what the label means (classification)
+`src/ai_options_trader/macro/regime.py` classifies regimes using two axes:
+
+- **Inflation surprise / momentum** (up vs down)
+- **Real yield proxy** (tightening vs easing financial conditions)
+
+This yields four named regimes (e.g., “stagflation”, “reflation”, etc.) that serve as a **coarse prior** for equity/risk behavior. The point is not to be “right” all the time; it is to ensure your downstream decisions are explicitly conditioned on a macro context.
+
+### Tariff / cost-push regimes: where trade policy enters
+The tariff subsystem (`src/ai_options_trader/tariff/*`) is designed around a cost-push thesis: import-exposed baskets can behave differently when cost pressures rise and pass-through risk increases. It provides:
+
+- Basket definitions / universes
+- Proxy series (FRED) and transforms
+- Regime scoring logic per basket
+
+### News + NLP layer: what it’s for (qualitative)
+Lox includes two complementary “text → structure” tools:
+
+- **Ticker news brief** (position/ticker monitoring):
+  - Fetches **FMP `stock_news`** (recent, ticker-scoped)
+  - Summarizes and classifies tone (optional explain mode with evidence indices)
+- **Macro news brief**:
+  - Fetches **FMP `general_news`** (broad market/macro)
+  - Topic-tags items (monetary / fiscal / trade/tariffs / inflation / growth/labor)
+  - Produces a 3/6/12-month macro outlook narrative
+
+### Economic calendar: “what to watch next”
+Lox can compute “What to watch next” items using:
+
+- **FMP `economic_calendar`** for next release dates (preferred)
+- **Official schedule scraping** (fallback)
+
+The watchlist is meant to be actionable: it tells you what macro prints are most likely to move the regime inputs (inflation, rates, expectations) and, by extension, the option structures you prefer.
+
+### Combined macro outlook: quant + qual in one report
+`lox macro outlook` combines:
+
+- `MacroState` (quant)
+- `MacroRegime` (classification)
+- recent macro news items (qual)
+- watchlist (calendar)
+
+Then asks the LLM to produce a single cohesive outlook across 3/6/12 months that explicitly ties “what to watch” to the regime.
+
+### Single ticker outlook: quant + macro + news (+ optional concrete option legs)
+`lox ticker-outlook` combines:
+
+- Ticker quant snapshot: trend/momentum/volatility/relative strength vs benchmark
+- macro regime + macro inputs
+- ticker news items (FMP stock_news)
+- optional “options plan” + Alpaca option chain selection + interactive submit
 
 ## Architecture
 
@@ -139,11 +220,11 @@ avocado track report
 ### Macro
 
 ```bash
-avocado macro snapshot
-avocado macro news --provider fmp --days 7
-avocado macro outlook --provider fmp --days 7
-avocado macro equity-sensitivity --tickers NVDA,AMD,MSFT,GOOGL --benchmark QQQ
-avocado macro beta-adjusted-sensitivity --tickers NVDA,AMD,MSFT,GOOGL --benchmark QQQ
+lox macro snapshot
+lox macro news --provider fmp --days 7
+lox macro outlook --provider fmp --days 7
+lox macro equity-sensitivity --tickers NVDA,AMD,MSFT,GOOGL --benchmark QQQ
+lox macro beta-adjusted-sensitivity --tickers NVDA,AMD,MSFT,GOOGL --benchmark QQQ
 ```
 
 ### News & sentiment (positions / tickers)
@@ -151,27 +232,35 @@ avocado macro beta-adjusted-sensitivity --tickers NVDA,AMD,MSFT,GOOGL --benchmar
 Summarize recent ticker-specific news (uses Alpaca open positions by default, or pass tickers explicitly):
 
 ```bash
-avocado track news-brief --provider fmp --days 7 --tickers AAPL,MSFT
-avocado track news-brief --provider fmp --days 7
+lox track news-brief --provider fmp --days 7 --tickers AAPL,MSFT
+lox track news-brief --provider fmp --days 7
 ```
 
 Explain mode (includes reasons + evidence indices and prints indexed inputs):
 
 ```bash
-avocado track news-brief --provider fmp --days 7 --tickers AAPL --explain
+lox track news-brief --provider fmp --days 7 --tickers AAPL --explain
+```
+
+### Single ticker outlook (3/6/12 months)
+
+```bash
+lox ticker-outlook --ticker AAPL --benchmark SPY --news-days 14
+lox ticker-outlook --ticker AAPL --interactive
+lox ticker-outlook --ticker AAPL --interactive --execute
 ```
 
 ### Single-name leg selection
 
 ```bash
-avocado select --ticker AAPL --sentiment positive --target-dte 30 --debug
+lox select --ticker AAPL --sentiment positive --target-dte 30 --debug
 ```
 
 ### Tariff
 
 ```bash
-avocado tariff snapshot --basket import_retail_apparel --benchmark XLY
-avocado tariff baskets
+lox tariff snapshot --basket import_retail_apparel --benchmark XLY
+lox tariff baskets
 ```
 
 ## Notes & limitations

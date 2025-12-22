@@ -10,7 +10,7 @@ from ai_options_trader.macro.regime import classify_macro_regime
 
 from ai_options_trader.macro.signals import build_macro_state
 
-app = typer.Typer(add_completion=False, help="AI Options Trader CLI")
+app = typer.Typer(add_completion=False, help="Lox — regime-aware options research & execution CLI")
 macro_app = typer.Typer(add_completion=False, help="Macro signals and datasets")
 app.add_typer(macro_app, name="macro")
 tariff_app = typer.Typer(add_completion=False, help="Tariff / cost-push regime signals")
@@ -85,6 +85,312 @@ def select(
         f"dte={best.dte_days} mid=${best.mid:.2f} Δ={best.delta:.3f}"
     )
     print(f"Contracts: {best.size.max_contracts} (budget=${best.size.budget_usd:,.2f})")
+
+
+@app.command("ticker-outlook")
+def ticker_outlook(
+    ticker: str = typer.Option(..., "--ticker", "-t", help="Ticker, e.g. AAPL"),
+    benchmark: str = typer.Option("SPY", "--benchmark", help="Benchmark ticker for relative strength (e.g. SPY, QQQ)"),
+    price_start: str = typer.Option("2016-01-01", "--price-start", help="Start date for price history (YYYY-MM-DD)"),
+    news_days: int = typer.Option(7, "--news-days", help="Lookback window for ticker news (days)"),
+    fmp_pages: int = typer.Option(2, "--fmp-pages", help="Pages to fetch from FMP stock_news"),
+    llm_model: str = typer.Option("", "--llm-model", help="Override OPENAI_MODEL (optional)"),
+    llm_temperature: float = typer.Option(0.2, "--llm-temperature", help="LLM temperature"),
+    options: bool = typer.Option(
+        True,
+        "--options/--no-options",
+        help="Include high-level option structures aligned to the outlook (no exact strikes).",
+    ),
+    interactive: bool = typer.Option(
+        False,
+        "--interactive",
+        help="Show suggested option legs and (optionally) submit paper orders after confirmation.",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--execute",
+        help="When used with --interactive, allow submitting orders (still asks for confirmation).",
+    ),
+):
+    """
+    Single-ticker 3/6/12 month outlook combining:
+    - quantitative ticker regime (trend/momentum/vol/relative strength)
+    - macro regime (from FRED-based macro state)
+    - recent ticker news (FMP stock_news)
+    """
+    from datetime import timedelta
+    from typing import Any
+
+    from rich.console import Console
+    from rich.panel import Panel
+
+    from ai_options_trader.data.market import fetch_equity_daily_closes
+    from ai_options_trader.llm.ticker_news import fetch_fmp_stock_news, filter_items_since, utc_now as news_now
+    from ai_options_trader.llm.ticker_outlook import (
+        build_ticker_quant_snapshot,
+        build_news_lookback_window,
+        llm_ticker_full_outlook,
+        llm_ticker_option_plan,
+    )
+    from ai_options_trader.macro.signals import build_macro_state
+    from ai_options_trader.macro.regime import classify_macro_regime
+
+    settings = load_settings()
+    c = Console()
+
+    t = ticker.strip().upper()
+    b = benchmark.strip().upper()
+
+    # --- Prices (Alpaca) ---
+    try:
+        px = fetch_equity_daily_closes(
+            api_key=settings.alpaca_data_key or settings.alpaca_api_key,
+            api_secret=settings.alpaca_data_secret or settings.alpaca_api_secret,
+            symbols=sorted({t, b}),
+            start=price_start,
+        )
+    except Exception as e:
+        c.print(Panel(f"[red]Failed to fetch prices[/red]\n\n{e}", title="Error", expand=False))
+        raise typer.Exit(code=1)
+
+    try:
+        quant = build_ticker_quant_snapshot(prices=px, ticker=t, benchmark=b)
+    except Exception as e:
+        c.print(Panel(f"[red]Failed to compute quant snapshot[/red]\n\n{e}", title="Error", expand=False))
+        raise typer.Exit(code=1)
+
+    # --- Macro regime (FRED) ---
+    if not settings.fred_api_key:
+        c.print(Panel("Missing FRED_API_KEY; cannot compute macro regime.", title="Error", expand=False))
+        raise typer.Exit(code=1)
+    macro_state = build_macro_state(settings=settings, start_date="2016-01-01", refresh=False)
+    macro_regime = classify_macro_regime(
+        inflation_momentum_minus_be=macro_state.inputs.inflation_momentum_minus_be5y or 0.0,
+        real_yield=macro_state.inputs.real_yield_proxy_10y or 0.0,
+    )
+
+    # --- News (FMP) ---
+    news_payload = []
+    if settings.fmp_api_key:
+        try:
+            from_date, to_date = build_news_lookback_window(int(news_days))
+            items = fetch_fmp_stock_news(
+                settings=settings,
+                tickers=[t],
+                from_date=from_date,
+                to_date=to_date,
+                start_page=0,
+                max_pages=int(fmp_pages),
+            )
+            # Tighten to the actual lookback window in hours based on published timestamps.
+            since = news_now() - timedelta(days=int(news_days))
+            items = filter_items_since(items, since)
+            for i, it in enumerate(items[:50]):
+                news_payload.append(
+                    {
+                        "i": i,
+                        "published_at": it.published_at,
+                        "title": it.title,
+                        "source": it.source,
+                        "url": it.url,
+                        "snippet": (it.snippet[:500] if it.snippet else None),
+                    }
+                )
+        except Exception as e:
+            c.print(Panel(f"[yellow]FMP news fetch failed[/yellow]\n\n{e}", title="Warning", expand=False))
+    else:
+        c.print(Panel("FMP_API_KEY not set; proceeding without news items.", title="Info", expand=False))
+
+    header = (
+        f"Ticker: {t}\nBenchmark: {b}\n"
+        f"Quant asof: {quant.get('asof')}\n"
+        f"Macro regime: {getattr(macro_regime, 'name', '')} (asof={macro_state.asof})\n"
+        f"News items: {len(news_payload)} (lookback={news_days}d)\n"
+        f"Model: {llm_model.strip() or settings.openai_model}"
+    )
+    c.print(Panel(header, title="Ticker Outlook", expand=False))
+
+    if not settings.openai_api_key:
+        c.print(Panel("OPENAI_API_KEY is not set; cannot generate the outlook.", title="Error", expand=False))
+        raise typer.Exit(code=1)
+
+    # --- Option plan + concrete legs (optional, interactive) ---
+    option_plan = []
+    suggested_legs: list[dict[str, Any]] = []
+    if interactive:
+        if execute and not settings.alpaca_paper:
+            c.print("[red]Refusing to submit orders because ALPACA_PAPER is false.[/red]")
+            execute = False
+
+        try:
+            option_plan = llm_ticker_option_plan(
+                settings=settings,
+                quant=quant,
+                macro_state=macro_state,
+                macro_regime=macro_regime,
+                news_items=news_payload,
+                lookback_label=f"last {news_days} days",
+                model=llm_model.strip() or None,
+                temperature=float(llm_temperature),
+            )
+        except Exception as e:
+            c.print(Panel(f"[yellow]Could not build option plan[/yellow]\n\n{e}", title="Warning", expand=False))
+            option_plan = []
+
+        if option_plan:
+            from ai_options_trader.data.alpaca import make_clients, fetch_option_chain, to_candidates
+            from ai_options_trader.strategy.selector import choose_best_option
+            from ai_options_trader.config import StrategyConfig, RiskConfig
+
+            trading, data_client = make_clients(settings)
+            try:
+                acct = trading.get_account()
+                equity = float(acct.equity)
+            except Exception:
+                equity = 0.0
+
+            try:
+                chain = fetch_option_chain(data_client, t)
+                candidates = list(to_candidates(chain, t))
+            except Exception as e:
+                c.print(Panel(f"[red]Failed to fetch option chain[/red]\n\n{e}", title="Error", expand=False))
+                candidates = []
+
+            for p in option_plan:
+                want = None
+                if p.bias.startswith("bull"):
+                    want = "call"
+                elif p.bias.startswith("bear"):
+                    want = "put"
+                else:
+                    want = None
+
+                if not want or not candidates:
+                    suggested_legs.append(
+                        {
+                            "horizon_months": p.horizon_months,
+                            "bias": p.bias,
+                            "structure": p.structure,
+                            "target_dte_days": p.target_dte_days,
+                            "rationale": p.rationale,
+                            "selected": None,
+                            "note": "No directional leg selected (neutral bias or missing option chain).",
+                        }
+                    )
+                    continue
+
+                # DTE band: wide enough to find contracts around target.
+                td = max(7, int(p.target_dte_days))
+                strat = StrategyConfig(
+                    target_dte_days=td,
+                    dte_min=max(7, int(td * 0.6)),
+                    dte_max=max(int(td * 1.4), int(td + 14)),
+                )
+                risk = RiskConfig()
+                best = choose_best_option(
+                    candidates,
+                    t,
+                    want=want,
+                    equity_usd=equity if equity > 0 else 10000.0,
+                    strat=strat,
+                    risk=risk,
+                )
+                suggested_legs.append(
+                    {
+                        "horizon_months": p.horizon_months,
+                        "bias": p.bias,
+                        "structure": p.structure,
+                        "target_dte_days": p.target_dte_days,
+                        "rationale": p.rationale,
+                        "selected": best,
+                        "want": want,
+                    }
+                )
+
+    try:
+        report = llm_ticker_full_outlook(
+            settings=settings,
+            quant=quant,
+            macro_state=macro_state,
+            macro_regime=macro_regime,
+            news_items=news_payload,
+            lookback_label=f"last {news_days} days",
+            model=llm_model.strip() or None,
+            temperature=float(llm_temperature),
+            include_options=bool(options),
+        )
+    except Exception as e:
+        c.print(Panel(f"[red]LLM call failed[/red]\n\n{e}", title="Error", expand=False))
+        raise typer.Exit(code=1)
+
+    c.print(Panel(report or "(empty response)", title=f"{t} — 3/6/12m Outlook", expand=False))
+
+    # Show selected concrete legs + optional execution flow
+    if interactive and suggested_legs:
+        from ai_options_trader.execution.alpaca import submit_option_order
+
+        for leg in suggested_legs:
+            sel = leg.get("selected")
+            hm = leg.get("horizon_months")
+            bias = leg.get("bias")
+            structure = leg.get("structure")
+            rationale = leg.get("rationale")
+
+            if not sel:
+                c.print(
+                    Panel(
+                        f"Horizon: {hm}m | Bias: {bias} | Structure: {structure}\n"
+                        f"Rationale: {rationale}\n\n"
+                        f"(No leg selected) {leg.get('note','')}",
+                        title="Option leg",
+                        expand=False,
+                    )
+                )
+                continue
+
+            # sel is an OptionCandidate-like dict from selector (already serializable in prior flows)
+            symbol = sel.get("symbol") if isinstance(sel, dict) else getattr(sel, "symbol", None)
+            mid = sel.get("mid") if isinstance(sel, dict) else getattr(sel, "mid", None)
+            delta = sel.get("delta") if isinstance(sel, dict) else getattr(sel, "delta", None)
+            dte = sel.get("dte_days") if isinstance(sel, dict) else getattr(sel, "dte_days", None)
+            opt_type = sel.get("opt_type") if isinstance(sel, dict) else getattr(sel, "opt_type", None)
+            contracts = None
+            size = sel.get("size") if isinstance(sel, dict) else getattr(sel, "size", None)
+            if isinstance(size, dict):
+                contracts = size.get("max_contracts")
+            else:
+                contracts = getattr(size, "max_contracts", None) if size is not None else None
+
+            body = (
+                f"Horizon: {hm}m | Bias: {bias} | Structure: {structure}\n"
+                f"Rationale: {rationale}\n\n"
+                f"Selected leg: {symbol}\n"
+                f"Type: {opt_type} | DTE: {dte} | Mid: {mid} | Δ: {delta}\n"
+                f"Suggested qty: {contracts}\n"
+            )
+            c.print(Panel(body, title="Option leg (candidate)", expand=False))
+
+            if execute and symbol:
+                if not typer.confirm(f"Submit PAPER order for {symbol} now?", default=False):
+                    continue
+                qty = int(contracts or 1)
+                if qty < 1:
+                    qty = 1
+                # Buy at mid by default if available, else market.
+                limit_price = float(mid) if mid is not None else None
+                try:
+                    trading, _data = make_clients(settings)
+                    resp = submit_option_order(
+                        trading=trading,
+                        symbol=str(symbol),
+                        qty=qty,
+                        side="buy",
+                        limit_price=limit_price,
+                        tif="day",
+                    )
+                    c.print(f"[green]Submitted[/green]: {resp}")
+                except Exception as e:
+                    c.print(Panel(f"[red]Submit failed[/red]\n\n{e}", title="Error", expand=False))
 
 
 @macro_app.command("snapshot")
