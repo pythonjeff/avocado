@@ -134,6 +134,7 @@ class _SigmoidCalibrator:
     def __init__(self) -> None:
         self._lr = LogisticRegression(max_iter=1000, solver="lbfgs", random_state=42)
         self._fit = False
+        self._slope: float | None = None
 
     @staticmethod
     def _logit(p: np.ndarray) -> np.ndarray:
@@ -148,7 +149,14 @@ class _SigmoidCalibrator:
             self._fit = False
             return self
         self._lr.fit(x, yy)
-        self._fit = True
+        # Enforce monotonic increasing mapping; if slope is negative, calibration would invert ranking
+        # and destroy AUC. In that case, refuse calibration and fall back to identity.
+        try:
+            slope = float(np.array(self._lr.coef_).reshape(-1)[0])
+        except Exception:
+            slope = 0.0
+        self._slope = slope
+        self._fit = bool(slope > 0.0)
         return self
 
     def predict(self, p_raw: np.ndarray) -> np.ndarray:
