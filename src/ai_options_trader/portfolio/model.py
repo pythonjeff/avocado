@@ -305,7 +305,9 @@ def walk_forward_evaluation(
 
     # Regression metrics
     mae = float(mean_absolute_error(y_all, yhat_all))
-    rmse = float(mean_squared_error(y_all, yhat_all, squared=False))
+    # Some sklearn versions don't support squared=... in mean_squared_error.
+    # Compute RMSE portably: sqrt(MSE).
+    rmse = float(np.sqrt(mean_squared_error(y_all, yhat_all)))
     r2 = float(r2_score(y_all, yhat_all))
 
     return {
