@@ -80,18 +80,16 @@ def build_portfolio_dataset(
         on="date",
         how="left",
     )
-    f = f.merge(
-        usd_df[
-            [
-                "date",
-                "USD_STRENGTH_SCORE",
-                "Z_DTWEXBGS_MOM_60D",
-                "Z_DTWEXBGS_VOL_60D_ANN",
-            ]
-        ].copy(),
-        on="date",
-        how="left",
-    )
+    # USD dataset schema has evolved; support both:
+    # - newer: Z_DTWEXBGS_MOM_60D / Z_DTWEXBGS_VOL_60D_ANN
+    # - current repo: Z_USD_LEVEL / Z_USD_CHG_60D
+    usd_cols = ["date", "USD_STRENGTH_SCORE"]
+    if "Z_DTWEXBGS_MOM_60D" in usd_df.columns:
+        usd_cols += ["Z_DTWEXBGS_MOM_60D", "Z_DTWEXBGS_VOL_60D_ANN"]
+    else:
+        usd_cols += ["Z_USD_LEVEL", "Z_USD_CHG_60D"]
+
+    f = f.merge(usd_df[usd_cols].copy(), on="date", how="left")
 
     f = f.sort_values("date").set_index("date")
     f = f.rename(
@@ -106,8 +104,12 @@ def build_portfolio_dataset(
             "Z_TGA_CHG_28D": "liq_z_tga_chg_28d",
             "Z_RRP_CHG_20D": "liq_z_rrp_chg_20d",
             "USD_STRENGTH_SCORE": "usd_strength_score",
+            # Newer schema
             "Z_DTWEXBGS_MOM_60D": "usd_z_mom_60d",
             "Z_DTWEXBGS_VOL_60D_ANN": "usd_z_vol_60d",
+            # Current repo schema
+            "Z_USD_LEVEL": "usd_z_level",
+            "Z_USD_CHG_60D": "usd_z_chg_60d",
         }
     )
 
