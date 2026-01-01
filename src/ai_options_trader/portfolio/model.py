@@ -116,3 +116,92 @@ def build_forecasts(X: pd.DataFrame, y_df: pd.DataFrame) -> list[HorizonForecast
     return out
 
 
+def _extract_linear_coefs(pipe: Pipeline, feature_names: list[str]) -> dict[str, float] | None:
+    """
+    Extract coefficients from a linear model inside a pipeline. Returns mapping feature->coef.
+    Coefs are in the standardized feature space (after StandardScaler).
+    """
+    try:
+        model = pipe.named_steps.get("clf") or pipe.named_steps.get("reg")
+        coef = getattr(model, "coef_", None)
+        if coef is None:
+            return None
+        arr = np.array(coef).reshape(-1)
+        if len(arr) != len(feature_names):
+            return None
+        return {feature_names[i]: float(arr[i]) for i in range(len(feature_names))}
+    except Exception:
+        return None
+
+
+def fit_models_for_debug(
+    *,
+    X: pd.DataFrame,
+    y: pd.Series,
+) -> tuple[Pipeline | None, Pipeline | None, float | None]:
+    """
+    Fit classifier/regressor on all available history (aligned) and return fitted models + auc_cv.
+    """
+    if X.empty or y.empty:
+        return None, None, None
+
+    idx = X.index.intersection(y.index)
+    X2 = X.loc[idx].copy()
+    y2 = y.loc[idx].copy()
+    X2 = X2.replace([np.inf, -np.inf], np.nan)
+    y2 = y2.replace([np.inf, -np.inf], np.nan)
+    keep = X2.dropna().index.intersection(y2.dropna().index)
+    X2 = X2.loc[keep]
+    y2 = y2.loc[keep]
+    if len(X2) < 250:
+        return None, None, None
+
+    auc = _cv_auc(_make_classifier(), X2, y2)
+
+    yb = (y2 > 0.0).astype(int)
+    clf = _make_classifier()
+    reg = _make_regressor()
+    clf.fit(X2, yb)
+    reg.fit(X2, y2)
+    return clf, reg, auc
+
+
+def model_debug_report(
+    *,
+    X: pd.DataFrame,
+    y_df: pd.DataFrame,
+    top_n: int = 12,
+) -> dict[str, dict[str, object]]:
+    """
+    Return per-horizon debug info:
+    - auc_cv (classifier)
+    - top positive/negative coefficients for classifier and regressor
+    """
+    feature_names = list(X.columns)
+    out: dict[str, dict[str, object]] = {}
+
+    for h, col in [("3m", "fwd_ret_3m"), ("6m", "fwd_ret_6m"), ("12m", "fwd_ret_12m")]:
+        clf, reg, auc = fit_models_for_debug(X=X, y=y_df[col])
+        if clf is None or reg is None:
+            out[h] = {"auc_cv": auc, "status": "insufficient_data"}
+            continue
+
+        clf_coefs = _extract_linear_coefs(clf, feature_names) or {}
+        reg_coefs = _extract_linear_coefs(reg, feature_names) or {}
+
+        def top_pairs(d: dict[str, float]) -> dict[str, list[tuple[str, float]]]:
+            items = sorted(d.items(), key=lambda kv: kv[1])
+            neg = items[:top_n]
+            pos = items[-top_n:][::-1]
+            return {"top_positive": pos, "top_negative": neg}
+
+        out[h] = {
+            "auc_cv": auc,
+            "classifier": top_pairs(clf_coefs),
+            "regressor": top_pairs(reg_coefs),
+            "status": "ok",
+        }
+
+    return out
+
+

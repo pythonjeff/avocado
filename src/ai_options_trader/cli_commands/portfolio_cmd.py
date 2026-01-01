@@ -14,7 +14,7 @@ from ai_options_trader.liquidity.signals import build_liquidity_state
 from ai_options_trader.macro.regime import classify_macro_regime_from_state
 from ai_options_trader.macro.signals import build_macro_state
 from ai_options_trader.portfolio.dataset import build_portfolio_dataset
-from ai_options_trader.portfolio.model import build_forecasts
+from ai_options_trader.portfolio.model import build_forecasts, model_debug_report
 from ai_options_trader.portfolio.planner import plan_portfolio
 from ai_options_trader.portfolio.universe import DEFAULT_UNIVERSE
 from ai_options_trader.usd.signals import build_usd_state
@@ -30,6 +30,8 @@ def register(app: typer.Typer) -> None:
         ),
         execute: bool = typer.Option(False, "--execute", help="Submit PAPER orders (still asks for confirmation)"),
         show_features: bool = typer.Option(False, "--features", help="Print the latest feature vector JSON used for prediction"),
+        model_debug: bool = typer.Option(False, "--model-debug", help="Print what the ML models are using (top coefficients)"),
+        model_debug_top: int = typer.Option(12, "--model-debug-top", help="How many top +/- coefficients to show per model"),
     ):
         """
         Build regimes + train a simple ML forecaster + propose a macro-ETF portfolio, then ask permission to execute.
@@ -90,6 +92,10 @@ def register(app: typer.Typer) -> None:
             refresh_fred=refresh,
         )
         forecasts = build_forecasts(ds.X, ds.y)
+
+        if model_debug:
+            dbg = model_debug_report(X=ds.X, y_df=ds.y, top_n=int(model_debug_top))
+            console.print(Panel(json.dumps(dbg, indent=2, default=str), title="Model debug (coefficients)", expand=False))
 
         # --- Plan portfolio ---
         plan = plan_portfolio(
