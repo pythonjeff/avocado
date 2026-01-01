@@ -293,8 +293,8 @@ def register(app: typer.Typer) -> None:
         t.add_column("Horizon", style="bold")
         t.add_column("n")
         t.add_column("pos_rate")
-        t.add_column("AUC raw")
-        t.add_column("AUC cal")
+        t.add_column("AUC raw (fold-wtd)")
+        t.add_column("AUC cal (fold-wtd)")
         t.add_column("logloss raw")
         t.add_column("logloss cal")
         t.add_column("logloss baseline")
@@ -302,6 +302,7 @@ def register(app: typer.Typer) -> None:
         t.add_column("brier cal")
         t.add_column("prob_mean raw")
         t.add_column("prob_mean cal")
+        t.add_column("valid_folds")
         t.add_column("acc")
         t.add_column("CM [[tn,fp],[fn,tp]]")
         t.add_column("MAE")
@@ -328,6 +329,7 @@ def register(app: typer.Typer) -> None:
                 f"{_get(d, 'classification.brier_cal', float('nan')):.3f}",
                 f"{_get(d, 'classification.prob_mean', float('nan')):.3f}",
                 f"{_get(d, 'classification.prob_cal_mean', float('nan')):.3f}",
+                str(_get(d, "classification.valid_folds", "")),
                 f"{_get(d, 'classification.accuracy', float('nan')):.3f}",
                 json.dumps(cm),
                 f"{_get(d, 'regression.mae', float('nan')):.2f}",

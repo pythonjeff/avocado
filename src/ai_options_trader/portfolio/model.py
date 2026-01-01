@@ -497,6 +497,7 @@ def walk_forward_evaluation(
 
     fold_aucs: list[float] = []
     fold_aucs_cal: list[float] = []
+    fold_sizes: list[int] = []
     valid_folds = 0
 
     for train_idx, test_idx in tscv.split(X2):
@@ -511,6 +512,7 @@ def walk_forward_evaluation(
         if ytr_b.nunique() < 2 or yte_b.nunique() < 2:
             continue
         valid_folds += 1
+        fold_sizes.append(int(len(test_idx)))
 
         clf = _make_classifier()
         reg = _make_regressor()
@@ -547,11 +549,38 @@ def walk_forward_evaluation(
                         p_apply=np.asarray(p_apply),
                         method=calibration_method,
                     )
-                    p_cal_all.extend([float(x) for x in p_cal])
-                    try:
-                        fold_aucs_cal.append(float(roc_auc_score(yte_b, p_cal)))
-                    except Exception:
-                        pass
+                    # Guardrail: only accept calibration if it improves probability quality on calibration slice.
+                    # Compute cal-slice metrics for raw vs calibrated.
+                    p_cal_on_cal = _calibrate_probs(
+                        p_fit=np.asarray(p_fit),
+                        y_fit=np.asarray(y_cal.values),
+                        p_apply=np.asarray(p_fit),
+                        method=calibration_method,
+                    )
+                    ll_raw_cal = _safe_logloss(list(map(int, y_cal.values)), list(map(float, p_fit)))
+                    ll_cal_cal = _safe_logloss(list(map(int, y_cal.values)), list(map(float, p_cal_on_cal)))
+                    b_raw_cal = _safe_brier(list(map(int, y_cal.values)), list(map(float, p_fit)))
+                    b_cal_cal = _safe_brier(list(map(int, y_cal.values)), list(map(float, p_cal_on_cal)))
+
+                    accept = True
+                    if ll_raw_cal is not None and ll_cal_cal is not None and ll_cal_cal > ll_raw_cal:
+                        accept = False
+                    if b_raw_cal is not None and b_cal_cal is not None and b_cal_cal > b_raw_cal:
+                        accept = False
+
+                    if accept:
+                        p_cal_all.extend([float(x) for x in p_cal])
+                        try:
+                            fold_aucs_cal.append(float(roc_auc_score(yte_b, p_cal)))
+                        except Exception:
+                            pass
+                    else:
+                        # Fallback: use raw probabilities for calibrated stream for this fold.
+                        p_cal_all.extend([float(x) for x in p_apply])
+                        try:
+                            fold_aucs_cal.append(float(roc_auc_score(yte_b, p_apply)))
+                        except Exception:
+                            pass
 
         try:
             fold_aucs.append(float(roc_auc_score(yte_b, p)))
@@ -562,7 +591,9 @@ def walk_forward_evaluation(
         return {"status": "no_valid_folds", "n": int(len(X2))}
 
     # Classification metrics (raw)
-    auc = float(roc_auc_score(yb_all, p_all)) if len(set(yb_all)) > 1 else None
+    # NOTE: For research-grade reporting, prefer fold-wise AUC summaries over a single concatenated AUC.
+    # Concatenated AUC can be misleading when each fold is produced by a different fitted model.
+    auc = float(np.average(fold_aucs, weights=fold_sizes[: len(fold_aucs)])) if fold_aucs else None
     ll = _safe_logloss(yb_all, p_all)
     brier = _safe_brier(yb_all, p_all)
 
@@ -573,7 +604,7 @@ def walk_forward_evaluation(
 
     # Classification metrics (calibrated) – may be missing if calibration couldn't run on folds
     has_cal = len(p_cal_all) == len(p_all) and len(p_cal_all) > 0
-    auc_cal = (float(roc_auc_score(yb_all, p_cal_all)) if has_cal and len(set(yb_all)) > 1 else None)
+    auc_cal = float(np.average(fold_aucs_cal, weights=fold_sizes[: len(fold_aucs_cal)])) if fold_aucs_cal else None
     ll_cal = (_safe_logloss(yb_all, p_cal_all) if has_cal else None)
     brier_cal = (_safe_brier(yb_all, p_cal_all) if has_cal else None)
 
@@ -611,6 +642,7 @@ def walk_forward_evaluation(
             "auc_cal_folds_mean": (float(np.mean(fold_aucs_cal)) if fold_aucs_cal else None),
             "auc_cal_folds": fold_aucs_cal,
             "valid_folds": int(valid_folds),
+            "fold_sizes": fold_sizes,
             "pos_rate": pos_rate,
             "prob_mean": p_mean,
             "prob_std": p_std,
