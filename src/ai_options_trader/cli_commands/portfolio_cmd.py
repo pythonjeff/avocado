@@ -14,7 +14,7 @@ from ai_options_trader.liquidity.signals import build_liquidity_state
 from ai_options_trader.macro.regime import classify_macro_regime_from_state
 from ai_options_trader.macro.signals import build_macro_state
 from ai_options_trader.portfolio.dataset import build_portfolio_dataset
-from ai_options_trader.portfolio.model import build_forecasts, model_debug_report, walk_forward_evaluation
+from ai_options_trader.portfolio.model import HORIZON_TO_DAYS, build_forecasts, model_debug_report, walk_forward_evaluation
 from ai_options_trader.portfolio.planner import plan_portfolio
 from ai_options_trader.portfolio.universe import DEFAULT_UNIVERSE
 from ai_options_trader.usd.signals import build_usd_state
@@ -32,6 +32,9 @@ def register(app: typer.Typer) -> None:
         show_features: bool = typer.Option(False, "--features", help="Print the latest feature vector JSON used for prediction"),
         model_debug: bool = typer.Option(False, "--model-debug", help="Print what the ML models are using (top coefficients)"),
         model_debug_top: int = typer.Option(12, "--model-debug-top", help="How many top +/- coefficients to show per model"),
+        calibrate: bool = typer.Option(True, "--calibrate/--no-calibrate", help="Calibrate probabilities (recommended)"),
+        explain: bool = typer.Option(False, "--explain", help="Explain the latest prediction (feature contributions)"),
+        explain_top: int = typer.Option(12, "--explain-top", help="How many top +/- contributions to show"),
     ):
         """
         Build regimes + train a simple ML forecaster + propose a macro-ETF portfolio, then ask permission to execute.
@@ -91,11 +94,31 @@ def register(app: typer.Typer) -> None:
             start_date=start,
             refresh_fred=refresh,
         )
-        forecasts = build_forecasts(ds.X, ds.y)
+        forecasts = build_forecasts(ds.X, ds.y, calibrate=calibrate, calibration_method="sigmoid")
 
         if model_debug:
             dbg = model_debug_report(X=ds.X, y_df=ds.y, top_n=int(model_debug_top))
             console.print(Panel(json.dumps(dbg, indent=2, default=str), title="Model debug (coefficients)", expand=False))
+
+        if explain:
+            # Explain using the fitted (raw) models for each horizon. Calibration affects probabilities,
+            # but the directional "drivers" are still best read from the linear coefficients + scaled features.
+            from ai_options_trader.portfolio.explain import explain_linear_pipeline
+            from ai_options_trader.portfolio.model import fit_models_for_debug, HORIZON_TO_DAYS
+
+            x_last = ds.X.iloc[-1]
+            rep = {}
+            for h, col in [("3m", "fwd_ret_3m"), ("6m", "fwd_ret_6m"), ("12m", "fwd_ret_12m")]:
+                clf, reg, _auc = fit_models_for_debug(X=ds.X, y=ds.y[col].dropna())
+                if clf is None or reg is None:
+                    rep[h] = {"status": "insufficient_data"}
+                    continue
+                rep[h] = {
+                    "purge_n": int(HORIZON_TO_DAYS[h]),  # type: ignore[index]
+                    "classifier": explain_linear_pipeline(pipe=clf, x=x_last, top_n=int(explain_top)),
+                    "regressor": explain_linear_pipeline(pipe=reg, x=x_last, top_n=int(explain_top)),
+                }
+            console.print(Panel(json.dumps(rep, indent=2, default=str), title="Prediction explain (contributions)", expand=False))
 
         # --- Plan portfolio ---
         plan = plan_portfolio(
@@ -122,9 +145,11 @@ def register(app: typer.Typer) -> None:
             p = f.prob_up
             r = f.exp_return
             auc = f.auc_cv
+            raw = f.prob_up_raw
+            note = f.notes
             lines.append(
-                f"- {f.horizon}: P(up)={p:.3f} exp_ret={r:.2f}% auc_cv={(auc if auc is not None else float('nan')):.3f}"
-                if (p is not None and r is not None)
+                f"- {f.horizon}: P(up)={p:.3f} (raw={raw:.3f}, {note}) exp_ret={r:.2f}% auc_cv={(auc if auc is not None else float('nan')):.3f}"
+                if (p is not None and raw is not None and r is not None)
                 else f"- {f.horizon}: insufficient data"
             )
         lines.append("")
@@ -173,6 +198,7 @@ def register(app: typer.Typer) -> None:
         prob_threshold: float = typer.Option(0.50, "--prob-threshold", help="Classifier threshold for confusion matrix"),
         dump_dataset_summary: bool = typer.Option(True, "--summary/--no-summary", help="Print dataset shape/missingness summary"),
         json_out: bool = typer.Option(False, "--json", help="Print raw JSON output (otherwise print a readable report)"),
+        calibrate: bool = typer.Option(True, "--calibrate/--no-calibrate", help="Compute calibrated metrics (recommended)"),
     ):
         """
         Offline evaluation of the portfolio ML models (walk-forward, time-series split).
@@ -218,11 +244,31 @@ def register(app: typer.Typer) -> None:
             }
             console.print(Panel(json.dumps(summary, indent=2), title="Dataset summary", expand=False))
 
-        out = {
-            "3m": walk_forward_evaluation(X=ds.X, y=ds.y["fwd_ret_3m"], splits=int(splits), prob_threshold=float(prob_threshold)),
-            "6m": walk_forward_evaluation(X=ds.X, y=ds.y["fwd_ret_6m"], splits=int(splits), prob_threshold=float(prob_threshold)),
-            "12m": walk_forward_evaluation(X=ds.X, y=ds.y["fwd_ret_12m"], splits=int(splits), prob_threshold=float(prob_threshold)),
-        }
+        out = {}
+        out["3m"] = walk_forward_evaluation(
+            X=ds.X,
+            y=ds.y["fwd_ret_3m"],
+            splits=int(splits),
+            prob_threshold=float(prob_threshold),
+            purge_n=int(HORIZON_TO_DAYS["3m"]),
+            calibrate=bool(calibrate),
+        )
+        out["6m"] = walk_forward_evaluation(
+            X=ds.X,
+            y=ds.y["fwd_ret_6m"],
+            splits=int(splits),
+            prob_threshold=float(prob_threshold),
+            purge_n=int(HORIZON_TO_DAYS["6m"]),
+            calibrate=bool(calibrate),
+        )
+        out["12m"] = walk_forward_evaluation(
+            X=ds.X,
+            y=ds.y["fwd_ret_12m"],
+            splits=int(splits),
+            prob_threshold=float(prob_threshold),
+            purge_n=int(HORIZON_TO_DAYS["12m"]),
+            calibrate=bool(calibrate),
+        )
 
         if json_out:
             console.print(Panel(json.dumps(out, indent=2, default=str), title="Portfolio model eval (JSON)", expand=False))
@@ -242,10 +288,15 @@ def register(app: typer.Typer) -> None:
         t.add_column("Horizon", style="bold")
         t.add_column("n")
         t.add_column("pos_rate")
-        t.add_column("AUC (overall)")
-        t.add_column("AUC (fold mean)")
-        t.add_column("logloss")
-        t.add_column("brier")
+        t.add_column("AUC raw")
+        t.add_column("AUC cal")
+        t.add_column("logloss raw")
+        t.add_column("logloss cal")
+        t.add_column("logloss baseline")
+        t.add_column("brier raw")
+        t.add_column("brier cal")
+        t.add_column("prob_mean raw")
+        t.add_column("prob_mean cal")
         t.add_column("acc")
         t.add_column("CM [[tn,fp],[fn,tp]]")
         t.add_column("MAE")
@@ -264,9 +315,14 @@ def register(app: typer.Typer) -> None:
                 str(d.get("n")),
                 f"{_get(d, 'classification.pos_rate', 0.0):.2f}",
                 f"{_get(d, 'classification.auc', float('nan')):.3f}",
-                f"{_get(d, 'classification.auc_folds_mean', float('nan')):.3f}",
+                f"{_get(d, 'classification.auc_cal', float('nan')):.3f}",
                 f"{_get(d, 'classification.logloss', float('nan')):.3f}",
+                f"{_get(d, 'classification.logloss_cal', float('nan')):.3f}",
+                f"{_get(d, 'classification.baseline_logloss', float('nan')):.3f}",
                 f"{_get(d, 'classification.brier', float('nan')):.3f}",
+                f"{_get(d, 'classification.brier_cal', float('nan')):.3f}",
+                f"{_get(d, 'classification.prob_mean', float('nan')):.3f}",
+                f"{_get(d, 'classification.prob_cal_mean', float('nan')):.3f}",
                 f"{_get(d, 'classification.accuracy', float('nan')):.3f}",
                 json.dumps(cm),
                 f"{_get(d, 'regression.mae', float('nan')):.2f}",
