@@ -29,8 +29,6 @@ How the system attempts to express this (defined-risk where possible):
 - **Rates / duration sensitivity**: explicit attention to the yield curve and rate momentum regimes.
 - **Volatility convexity**: selective long‑vol / convex options expression when the overlay indicates an elevated asymmetry.
 
-This thesis is not a claim of future performance; it is the organizing research frame for the toolchain.
-
 ---
 
 ## Quickstart
