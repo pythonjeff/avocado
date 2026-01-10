@@ -129,6 +129,78 @@ def register(nav_app: typer.Typer) -> None:
             )
         c.print(tbl)
 
+    @investor_app.command("import")
+    def investor_import(
+        csv_path: str = typer.Argument(..., help="Path to CSV/XLSX export (headers: code/investor, amount, joined/date)."),
+        note: str = typer.Option("import", "--note", help="Default note for imported rows (unless CSV has a note column)."),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Parse and validate but do not write flows."),
+        ts: str = typer.Option("", "--ts", help="Override join date/timestamp for ALL imported rows (ISO date/time)."),
+        after_latest_nav: bool = typer.Option(
+            False,
+            "--after-latest-nav",
+            help="Ignore per-row joined dates and price ALL imported rows just after the latest NAV snapshot.",
+        ),
+        sheet_path: str = typer.Option("", "--sheet-path", help="Override AOT_NAV_SHEET (CSV) used by --after-latest-nav."),
+        investor_flows_path: str = typer.Option("", "--investor-flows-path", help="Override AOT_NAV_INVESTOR_FLOWS (CSV)."),
+    ):
+        """Import investor join dates + amounts from a CSV (e.g., Excel export)."""
+        from ai_options_trader.nav.investors import import_investors_csv
+        from ai_options_trader.nav.store import default_nav_sheet_path, read_nav_sheet, _parse_ts
+        from datetime import timedelta
+
+        ts_override = ts.strip() or ""
+        if after_latest_nav:
+            path_sheet = sheet_path or default_nav_sheet_path()
+            rows = read_nav_sheet(path=path_sheet)
+            if not rows:
+                raise typer.BadParameter(
+                    f"--after-latest-nav requires at least one NAV snapshot. Run `lox nav snapshot` first.\nnav_sheet: {path_sheet}"
+                )
+            last_ts = _parse_ts(rows[-1].ts) + timedelta(seconds=1)
+            ts_override = last_ts.isoformat()
+
+        rep = import_investors_csv(
+            csv_path=csv_path,
+            investor_flows_path=investor_flows_path or None,
+            note=note,
+            dry_run=bool(dry_run),
+            ts_override=ts_override or None,
+        )
+        Console().print(
+            Panel(
+                f"{'DRY RUN — ' if dry_run else ''}Imported {int(rep.get('rows') or 0)} row(s)\n"
+                f"investor_flows: {rep.get('path')}\n"
+                f"preview: {rep.get('preview')}",
+                title="NAV investor import",
+                expand=False,
+            )
+        )
+
+    @investor_app.command("contribute")
+    def investor_contribute(
+        code: str = typer.Argument(..., help="Investor code/initials (e.g., JL)"),
+        amount: float = typer.Argument(..., help="Signed USD amount. Deposit=positive, withdrawal=negative."),
+        note: str = typer.Option("", "--note"),
+        ts: str = typer.Option("", "--ts", help="Optional ISO timestamp (defaults to now UTC)."),
+        flows_path: str = typer.Option("", "--flows-path", help="Override AOT_NAV_FLOWS (CSV)."),
+        investor_flows_path: str = typer.Option("", "--investor-flows-path", help="Override AOT_NAV_INVESTOR_FLOWS (CSV)."),
+    ):
+        """Log a contribution that updates BOTH the fund cashflow ledger and the investor ledger (same timestamp)."""
+        from ai_options_trader.nav.store import append_cashflow
+        from ai_options_trader.nav.investors import append_investor_flow
+
+        path_fund = append_cashflow(ts=ts or None, amount=float(amount), note=note, path=flows_path or None)
+        path_inv = append_investor_flow(
+            code=code, amount=float(amount), note=note, ts=ts or None, path=investor_flows_path or None
+        )
+        Console().print(
+            Panel(
+                f"Logged contribution: {code.upper()} {amount:+.2f}\nfund_flows: {path_fund}\ninvestor_flows: {path_inv}",
+                title="NAV investor contribute",
+                expand=False,
+            )
+        )
+
     @nav_app.command("snapshot")
     def nav_snapshot(
         note: str = typer.Option("", "--note", help="Optional note (e.g., 'before trades', 'after trades')."),

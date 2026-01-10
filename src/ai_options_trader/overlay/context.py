@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+import csv
+from pathlib import Path
 
 from ai_options_trader.config import Settings
 
@@ -63,6 +65,7 @@ def fetch_calendar_events(
     settings: Settings,
     days_ahead: int = 10,
     max_items: int = 18,
+    us_only: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Best-effort: upcoming economic calendar events via FMP (cached in data layer).
@@ -77,7 +80,22 @@ def fetch_calendar_events(
     to_date = (now.date() + timedelta(days=int(days_ahead))).isoformat()
     rows = fetch_fmp_economic_calendar(api_key=settings.fmp_api_key, from_date=from_date, to_date=to_date)
     ev = normalize_fmp_economic_calendar(rows)
-    upcoming = [e for e in ev if e.datetime_utc > now][: max(0, int(max_items))]
+    upcoming0 = [e for e in ev if e.datetime_utc > now]
+
+    # Default filter: keep only US/USD-relevant events (to avoid surfacing random global CPI prints).
+    if bool(us_only):
+        upcoming = []
+        for e in upcoming0:
+            ctry = str(e.country or "").strip().lower()
+            cat = str(e.category or "").strip().lower()
+            is_us = (ctry in {"us", "usa", "united states"}) or ("united states" in ctry) or ("usd" in cat)
+            # If provider omitted country, keep it (best-effort).
+            if (not ctry) or is_us:
+                upcoming.append(e)
+    else:
+        upcoming = upcoming0
+
+    upcoming = upcoming[: max(0, int(max_items))]
     return [
         {
             "datetime_utc": e.datetime_utc.isoformat().replace("+00:00", "Z"),
@@ -222,4 +240,85 @@ def merge_news_payload(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
     items.sort(key=lambda x: str(x.get("published_at") or ""), reverse=True)
     out["items"] = items
     return out
+
+
+def fetch_treasury_auction_events(
+    *,
+    settings: Settings | None = None,
+    days_ahead: int = 21,
+    max_items: int = 18,
+    refresh: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Best-effort: upcoming Treasury auction calendar from FiscalData cache.
+
+    We prefer the local cache at `data/cache/fiscaldata/auctions_query.csv` (created by fiscal module pulls).
+    If `refresh=True` and we have network/runtime support, we will attempt a refresh via FiscalDataClient.
+
+    Returns normalized dicts compatible with `risk_watch["events"]`:
+      {datetime_utc, country, event, category, importance, forecast, previous, source}
+    """
+    cache_path = Path("data/cache/fiscaldata/auctions_query.csv")
+
+    # Optional refresh (runtime-only; tests/sandbox may not have network).
+    if refresh:
+        try:
+            from ai_options_trader.data.fiscaldata import FiscalDataClient, FiscalDataEndpoint
+
+            fd = FiscalDataClient()
+            fd.fetch(
+                endpoint=FiscalDataEndpoint(path="/v1/accounting/od/auctions_query"),
+                params={"sort": "-auction_date,-issue_date,maturity_date"},
+                cache_key="auctions_query",
+                refresh=True,
+            )
+        except Exception:
+            pass
+
+    if not cache_path.exists():
+        return []
+
+    now = datetime.now(timezone.utc)
+    end = now + timedelta(days=int(days_ahead))
+
+    out: list[dict[str, Any]] = []
+    with open(cache_path, newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            d = (row.get("auction_date") or "").strip()
+            if not d:
+                continue
+            try:
+                # Dates in cache are YYYY-MM-DD.
+                dt = datetime.fromisoformat(d).replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+            if dt < now:
+                continue
+            if dt > end:
+                continue
+            sec_type = (row.get("security_type") or "").strip()
+            sec_term = (row.get("security_term") or "").strip()
+            label = "Treasury auction"
+            if sec_type and sec_term:
+                label = f"Treasury auction: {sec_type} {sec_term}"
+            elif sec_type:
+                label = f"Treasury auction: {sec_type}"
+            out.append(
+                {
+                    "datetime_utc": dt.isoformat().replace("+00:00", "Z"),
+                    "country": "US",
+                    "event": label,
+                    "category": "Treasury auction",
+                    "importance": "medium",
+                    "forecast": None,
+                    "previous": None,
+                    "source": "fiscaldata_cache",
+                }
+            )
+            if len(out) >= max(0, int(max_items)):
+                break
+
+    out.sort(key=lambda x: str(x.get("datetime_utc") or ""))
+    return out[: max(0, int(max_items))]
 

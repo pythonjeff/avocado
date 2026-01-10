@@ -50,3 +50,71 @@ def test_investor_unitization_basic(tmp_path: Path):
     total_value = sum(r["value"] for r in rep["rows"])
     assert abs(total_value - 210.0) < 1e-6
 
+
+def test_investor_import_xlsx_excel_serial_dates(tmp_path: Path):
+    # Build a minimal .xlsx (zip) that our stdlib reader can parse.
+    xlsx = tmp_path / "investors.xlsx"
+    import zipfile
+
+    shared_strings = [
+        "Investor",
+        "Amount",
+        "Date",
+        "JL",
+    ]
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">'
+        + "".join(f"<si><t>{s}</t></si>" for s in shared_strings)
+        + "</sst>"
+    )
+    # Row 1: headers (shared strings 0,1,2); Row 2: JL, 150, 46031
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        "<sheetData>"
+        '<row r="1">'
+        '<c r="A1" t="s"><v>0</v></c>'
+        '<c r="B1" t="s"><v>1</v></c>'
+        '<c r="C1" t="s"><v>2</v></c>'
+        "</row>"
+        '<row r="2">'
+        '<c r="A2" t="s"><v>3</v></c>'
+        '<c r="B2"><v>150</v></c>'
+        '<c r="C2"><v>46031</v></c>'
+        "</row>"
+        "</sheetData>"
+        "</worksheet>"
+    )
+    with zipfile.ZipFile(xlsx, "w") as z:
+        z.writestr("xl/sharedStrings.xml", shared_xml)
+        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+
+    inv_flows = str(tmp_path / "nav_investor_flows.csv")
+    rep = append_investor_flow  # keep lint quiet about unused imports
+    from ai_options_trader.nav.investors import import_investors_csv, read_investor_flows
+
+    out = import_investors_csv(csv_path=str(xlsx), investor_flows_path=inv_flows, note="seed")
+    assert out["rows"] == 1
+    flows = read_investor_flows(path=inv_flows)
+    assert len(flows) == 1
+    assert flows[0].code == "JL"
+    assert abs(flows[0].amount - 150.0) < 1e-9
+    # Should have been converted to an ISO timestamp.
+    assert "T" in flows[0].ts
+
+
+def test_investor_import_ts_override(tmp_path: Path):
+    inv_csv = tmp_path / "investors.csv"
+    inv_csv.write_text("code,amount,joined\nJL,100,2026-01-01\nTG,200,2026-01-02\n")
+
+    inv_flows = str(tmp_path / "nav_investor_flows.csv")
+    from ai_options_trader.nav.investors import import_investors_csv, read_investor_flows
+
+    out = import_investors_csv(csv_path=str(inv_csv), investor_flows_path=inv_flows, ts_override="2026-02-01", note="seed")
+    assert out["rows"] == 2
+    flows = read_investor_flows(path=inv_flows)
+    assert len(flows) == 2
+    assert flows[0].ts.startswith("2026-02-01")
+    assert flows[1].ts.startswith("2026-02-01")
+

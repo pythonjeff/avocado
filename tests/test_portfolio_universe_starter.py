@@ -8,6 +8,6 @@ def test_starter_universe_contains_required_proxies():
     assert "GLDM" in tickers  # gold proxy
     assert "SLV" in tickers   # silver proxy
     assert "IBIT" in tickers  # bitcoin proxy
-    assert "SPLG" in tickers  # low-dollar S&P proxy
+    assert "SPY" in tickers   # S&P proxy
 
 

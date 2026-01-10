@@ -1,0 +1,63 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Calibri;}}
+\fs24
+\b Lox Fund CLI \emdash\ Command Guide (easy \rightarrow\ advanced)\b0\par
+\par
+\b 0) Quick mental model\b0\par
+Lox has three daily pillars: \b Account briefing\b0, \b Autopilot trades\b0, and \b NAV tracking\b0.\par
+\par
+\b 1) The easiest daily commands (no flags)\b0\par
+\pard\li360
+\b lox account \par\b0 Shows basic account balances (mode/cash/equity/buying power).\par
+\b lox account summary \par\b0 LLM briefing of positions + concrete risk watch (trackers + US/USD events + curated links).\par
+\b lox autopilot run-once \par\b0 Generates a budgeted trade plan from regimes (default engine is regime-analogs + factor momentum).\par
+\b lox nav snapshot \par\b0 Writes a NAV snapshot from Alpaca and computes returns.\par
+\b lox nav investor report \par\b0 Shows investor ownership/basis/value/P\~\&L via unitized NAV.\par
+\pard\par
+\b 2) The “execute trades” workflow (paper-first)\b0\par
+\pard\li360
+\b lox autopilot run-once --execute \par\b0 Prompts and submits PAPER orders (unless you also enable live).\par
+\b lox autopilot run-once --execute --live \par\b0 Allows LIVE orders only if ALPACA\_PAPER=false, with extra confirmations.\par
+\pard\par
+\b 3) Thesis / explainability (recommended)\b0\par
+\pard\li360
+\b lox autopilot run-once --thesis inflation\_fiscal --explain \par\b0 Biases toward inflation+fiscal-wall exposures and prints WHY THESE TRADES (drivers + US/USD events + Treasury auctions).\par
+\b lox autopilot run-once --no-explain \par\b0 Quiet mode (trade table only).\par
+\pard\par
+\b 4) Options / high-variance scanners\b0\par
+\pard\li360
+\b lox options moonshot \par\b0 Finds in-budget longshot options ideas, with review/execute prompts.\par
+\b lox options moonshot --ticker SLV \par\b0 Single-name moonshot.\par
+\pard\par
+\b 5) Fund accounting (investors + cashflows)\b0\par
+\pard\li360
+\b lox nav investor import "Investor list.xlsx" \par\b0 Imports investor code/amount/join date from Excel into the investor ledger.\par
+\b lox nav investor contribute JL 50 --note "Feb add" \par\b0 Logs a contribution that updates BOTH the fund cashflow ledger and the investor ledger (same timestamp).\par
+\b lox nav show \par\b0 Shows the NAV sheet (history).\par
+\pard\par
+\b 6) Model diagnostics (research)\b0\par
+\pard\li360
+\b lox model macro-model-eval --basket starter --book longonly \par\b0 Walk-forward evaluation: Spearman, hit rate, top-bottom spread, portfolio returns.\par
+\b lox model macro-model-eval-ab --basket starter --book longonly \par\b0 A/B sweep: tests adding each regime family (whitelist-extra) and compares metrics.\par
+\b lox model macro-model-dataset --basket starter --limit 20 \par\b0 Inspect/export the training dataset used by the ML model.\par
+\pard\par
+\b 7) Idea generation from a link (LLM)\b0\par
+\pard\li360
+\b lox ideas event --url <URL> --thesis "..." \par\b0 Turns a news link into structured hedge/trade ideas; can optionally execute.\par
+\pard\par
+\b 8) Power-user / Labs\b0\par
+\pard\li360
+\b lox labs <module> ... \par\b0 Regime builders, datasets, diagnostics, legacy tools.\par
+\b Examples:\b0\par
+\pard\li720
+lox labs fiscal snapshot\par
+lox labs rates snapshot\par
+lox labs regimes show\par
+\pard\par
+\b Notes\b0\par
+\pard\li360
+- Use \b lox <command> --help\b0 to see flags.\par
+- Paper vs live is controlled by \b ALPACA\_PAPER\b0 and \b --live\b0.\par
+\pard\par
+}
+

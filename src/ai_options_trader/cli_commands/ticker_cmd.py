@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import typer
 from rich import print
+from rich.console import Console
+from rich.panel import Panel
+from rich.pretty import Pretty
 
 from ai_options_trader.config import load_settings
 
@@ -82,5 +85,21 @@ def register(ticker_app: typer.Typer) -> None:
             temperature=float(llm_temperature),
         )
         print(text)
+
+    @ticker_app.command("dossier")
+    def ticker_dossier(
+        ticker: str = typer.Option(..., "--ticker", "-t", help="Ticker symbol (e.g., AAPL)"),
+        days_ahead: int = typer.Option(180, "--days-ahead", help="How far ahead to look for next earnings (days)"),
+    ):
+        """
+        Build a minimal alternative-data dossier for a ticker (start slow):
+        - company profile (sector/industry/market cap)
+        - next earnings date (if available)
+        """
+        settings = load_settings()
+        from ai_options_trader.altdata.fmp import build_ticker_dossier
+
+        d = build_ticker_dossier(settings=settings, ticker=ticker, days_ahead=int(days_ahead))
+        Console().print(Panel(Pretty(d, expand_all=True), title=f"Dossier: {ticker.upper()}", expand=False))
 
 

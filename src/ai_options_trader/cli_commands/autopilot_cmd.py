@@ -32,7 +32,11 @@ def register(autopilot_app: typer.Typer) -> None:
     def run_once(
         start: str = typer.Option("2012-01-01", "--start", help="Start date YYYY-MM-DD for regime feature matrix"),
         refresh: bool = typer.Option(False, "--refresh", help="Force refresh FRED downloads (regimes)"),
-        engine: str = typer.Option("playbook", "--engine", help="playbook|ml (ml uses panel model forecast)"),
+        engine: str = typer.Option(
+            "analog",
+            "--engine",
+            help="playbook|analog|ml (analog adds factor-momentum features to regime similarity; ml uses panel model forecast)",
+        ),
         basket: str = typer.Option("starter", "--basket", help="starter|extended (universe for idea generation)"),
         feature_set: str = typer.Option("fci", "--feature-set", help="full|fci (used when --engine ml)"),
         interaction_mode: str = typer.Option("whitelist", "--interaction-mode", help="none|whitelist|all (used when --engine ml)"),
@@ -41,6 +45,12 @@ def register(autopilot_app: typer.Typer) -> None:
             "--whitelist-extra",
             help="none|macro|funding|rates|vol|commod|fiscal (A/B: add a second whitelist interaction family; use with --interaction-mode whitelist)",
         ),
+        thesis: str = typer.Option(
+            "none",
+            "--thesis",
+            help="none|inflation_fiscal. If set, reweights rankings toward the thesis (still hedged + budget-aware).",
+        ),
+        explain: bool = typer.Option(True, "--explain/--no-explain", help="Print WHY THESE TRADES (drivers + event focus)"),
         stop_loss_pct: float = typer.Option(0.30, "--stop-loss", help="Close candidates when unrealized P/L% <= -X"),
         review_positions: bool = typer.Option(True, "--review-positions/--no-review-positions", help="Interactively review open positions (close/keep)"),
         execute: bool = typer.Option(False, "--execute", help="If set, can submit orders after confirmation (paper by default; use --live for live)"),
@@ -128,6 +138,9 @@ def register(autopilot_app: typer.Typer) -> None:
         flex_prefer_s = (flex_prefer or "options").strip().lower()
         if flex_prefer_s not in {"options", "shares"}:
             flex_prefer_s = "options"
+        thesis_s = (thesis or "none").strip().lower()
+        if thesis_s not in {"none", "inflation_fiscal"}:
+            thesis_s = "none"
         min_new_trades_n = max(0, int(min_new_trades))
         max_new_trades_n = max(int(max_new_trades), min_new_trades_n if min_new_trades_n > 0 else 0)
 
@@ -336,24 +349,15 @@ def register(autopilot_app: typer.Typer) -> None:
                 # Calendar events (best-effort; requires FMP key)
                 if getattr(settings, "fmp_api_key", None):
                     try:
-                        now = datetime.now(timezone.utc)
-                        from_date = now.date().isoformat()
-                        to_date = (now.date() + timedelta(days=int(llm_calendar_days))).isoformat()
-                        rows = fetch_fmp_economic_calendar(api_key=settings.fmp_api_key, from_date=from_date, to_date=to_date)  # type: ignore[arg-type]
-                        ev = normalize_fmp_economic_calendar(rows)
-                        upcoming = [e for e in ev if e.datetime_utc > now][: max(0, int(llm_calendar_max_items))]
-                        risk_watch["events"] = [
-                            {
-                                "datetime_utc": e.datetime_utc.isoformat().replace("+00:00", "Z"),
-                                "country": e.country,
-                                "event": e.event,
-                                "category": e.category,
-                                "importance": e.importance,
-                                "forecast": e.forecast,
-                                "previous": e.previous,
-                            }
-                            for e in upcoming
-                        ]
+                        # Use shared overlay helper so we consistently filter to US/USD events.
+                        from ai_options_trader.overlay.context import fetch_calendar_events
+
+                        risk_watch["events"] = fetch_calendar_events(
+                            settings=settings,
+                            days_ahead=int(llm_calendar_days),
+                            max_items=int(llm_calendar_max_items),
+                            us_only=True,
+                        )
                     except Exception:
                         pass
 
@@ -656,7 +660,7 @@ def register(autopilot_app: typer.Typer) -> None:
             X.reset_index().rename(columns={"index": "date"}).to_csv(cache_path, index=False)
 
         mode = (engine or "playbook").strip().lower()
-        if mode not in {"playbook", "ml"}:
+        if mode not in {"playbook", "analog", "ml"}:
             mode = "playbook"
 
         # Standardized candidate schema to feed both the trade proposer and the LLM.
@@ -713,8 +717,28 @@ def register(autopilot_app: typer.Typer) -> None:
                 )
             candidates.sort(key=lambda d: float(d.get("score") or -1e9), reverse=True)
         else:
+            # "analog": same playbook machinery (kNN in regime feature space) but with explicit
+            # factor-momentum features so the similarity search respects *direction of travel*.
+            Xm = X
+            if mode == "analog":
+                Xm = X.copy()
+                mom_cols = [
+                    "commod_pressure_score",
+                    "fiscal_pressure_score",
+                    "rates_z_ust_10y",
+                    "rates_z_curve_2s10s",
+                    "usd_strength_score",
+                    "vol_pressure_score",
+                    "funding_tightness_score",
+                    "macro_disconnect_score",
+                ]
+                mom_cols = [c for c in mom_cols if c in Xm.columns]
+                for w in (20, 60, 120):
+                    for c in mom_cols:
+                        Xm[f"{c}_mom{w}"] = pd.to_numeric(Xm[c], errors="coerce") - pd.to_numeric(Xm[c], errors="coerce").shift(int(w))
+
             ideas = rank_macro_playbook(
-                features=X,
+                features=Xm,
                 prices=px,
                 tickers=list(symbols),
                 horizon_days=63,
@@ -728,7 +752,7 @@ def register(autopilot_app: typer.Typer) -> None:
             for it in ideas:
                 candidates.append(
                     {
-                        "source": "playbook",
+                        "source": "analog" if mode == "analog" else "playbook",
                         "ticker": it.ticker,
                         "direction": it.direction,
                         "horizon_days": it.horizon_days,
@@ -739,12 +763,80 @@ def register(autopilot_app: typer.Typer) -> None:
                         "worst": it.worst,
                         "best": it.best,
                         "score": it.score,
+                        "notes": it.notes,
                     }
                 )
 
         # Portfolio-awareness: avoid recommending openings in symbols you already hold.
         if held_underlyings_initial:
             candidates = [c for c in candidates if str(c.get("ticker") or "").strip().upper() not in held_underlyings_initial]
+
+        # Thesis reweighting: bias the ranking toward the chosen macro thesis without hard-filtering.
+        # This is intentionally simple/transparent so the operator understands why items rise/fall.
+        def _thesis_tag_weight(tkr: str) -> tuple[str, float]:
+            t = (tkr or "").strip().upper()
+            if thesis_s == "inflation_fiscal":
+                # Inflation persistence (real assets + inflation-linked)
+                inflation = {
+                    "GLDM",
+                    "GLD",
+                    "SLV",
+                    "GDX",
+                    "DBC",
+                    "USO",
+                    "CPER",
+                    "XLE",
+                    "TIP",
+                }
+                # Fiscal wall / borrowing stress (rates up + hedges)
+                fiscal_wall = {
+                    "TBT",
+                    "TBF",
+                    "TMV",
+                    "SH",
+                    "PSQ",
+                    "SDS",
+                    "SQQQ",
+                    "SPXU",
+                    "SJB",
+                    "UUP",
+                    "VIXY",
+                    "KRE",
+                }
+                credit = {"HYG", "LQD"}
+                if t in inflation:
+                    return "inflation", 1.35
+                if t in credit:
+                    # Credit is a fiscal-wall stress *channel*, but we will generally express it as a hedge (bearish).
+                    return "credit_stress", 1.25
+                if t in fiscal_wall:
+                    return "fiscal_wall", 1.25
+                # Neutral weight for broad beta sleeves
+                return "neutral", 1.0
+            return "neutral", 1.0
+
+        if thesis_s != "none" and candidates:
+            for c in candidates:
+                tkr = str(c.get("ticker") or "")
+                tag, w = _thesis_tag_weight(tkr)
+                base = c.get("score")
+                try:
+                    base_f = float(base) if base is not None else 0.0
+                except Exception:
+                    base_f = 0.0
+                c["score_raw"] = base_f
+                c["thesis"] = thesis_s
+                c["thesis_tag"] = tag
+                c["thesis_weight"] = float(w)
+                c["score"] = float(base_f) * float(w)
+
+                # Thesis directional overrides (keep explicit and narrow).
+                # Under inflation_fiscal, we generally treat corporate credit as a stress point → hedge, not long.
+                if thesis_s == "inflation_fiscal" and tkr.strip().upper() in {"HYG", "LQD"}:
+                    c["direction"] = "bearish"
+                    c["exposure"] = "bearish"
+                    c["thesis_override"] = "credit_bearish"
+            candidates.sort(key=lambda d: float(d.get("score") or -1e9), reverse=True)
 
         # Attach option legs when enabled
         legs: dict[str, dict] = {}
@@ -1165,6 +1257,115 @@ def register(autopilot_app: typer.Typer) -> None:
                 _print_plan_table(nm, pp)
         else:
             _print_plan_table(plan_name_active, proposed)
+
+        # Explainability: make the selection legible (especially under a thesis mode).
+        if bool(explain):
+            try:
+                feat_row_explain = X.loc[asof_ts].to_dict()
+            except Exception:
+                feat_row_explain = {}
+
+            driver_keys = [
+                "commod_pressure_score",
+                "fiscal_pressure_score",
+                "rates_z_ust_10y",
+                "rates_z_curve_2s10s",
+                "usd_strength_score",
+                "vol_pressure_score",
+                "funding_tightness_score",
+                "macro_disconnect_score",
+            ]
+            drivers = {k: feat_row_explain.get(k) for k in driver_keys if k in feat_row_explain}
+
+            # Event focus (best-effort): FMP econ calendar + cached Treasury auctions.
+            events_all: list[dict] = []
+            try:
+                from ai_options_trader.overlay.context import fetch_calendar_events, fetch_treasury_auction_events
+
+                events_all.extend(
+                    fetch_calendar_events(
+                        settings=settings,
+                        days_ahead=int(llm_calendar_days),
+                        max_items=max(60, int(llm_calendar_max_items)),
+                    )
+                )
+                events_all.extend(fetch_treasury_auction_events(days_ahead=max(21, int(llm_calendar_days)), max_items=30))
+            except Exception:
+                events_all = []
+
+            def _filter_events(evs: list[dict], keywords: list[str], *, max_items: int = 8) -> list[dict]:
+                kw = [k.strip().lower() for k in (keywords or []) if k and k.strip()]
+                out: list[dict] = []
+                for e0 in (evs or []):
+                    name = str(e0.get("event") or "").lower()
+                    cat = str(e0.get("category") or "").lower()
+                    if (not kw) or any(k in name or k in cat for k in kw):
+                        out.append(e0)
+                    if len(out) >= int(max_items):
+                        break
+                return out
+
+            thesis_kw = ["cpi", "pce", "fomc", "jobs", "payroll"]
+            if thesis_s == "inflation_fiscal":
+                thesis_kw = [
+                    "cpi",
+                    "pce",
+                    "ppi",
+                    "inflation",
+                    "fomc",
+                    "fed",
+                    "auction",
+                    "treasury",
+                    "jobs",
+                    "payroll",
+                    "unemployment",
+                    "wage",
+                ]
+            events_focus = _filter_events(events_all, thesis_kw, max_items=8)
+
+            if drivers:
+                console.print(
+                    Panel(
+                        f"thesis={thesis_s}\n" + "\n".join([f"- {k}={drivers.get(k)}" for k in drivers.keys()]),
+                        title="WHY THESE TRADES — thesis drivers (latest)",
+                        expand=False,
+                    )
+                )
+            else:
+                console.print(Panel(f"thesis={thesis_s}\n- (no tracker row available)", title="WHY THESE TRADES", expand=False))
+
+            if events_focus:
+                lines = []
+                for e0 in events_focus:
+                    dt = str(e0.get("datetime_utc") or "")[:10]
+                    lines.append(f"- {dt} — {e0.get('event')} ({e0.get('category')})")
+                console.print(Panel("\n".join(lines), title="WHY THESE TRADES — upcoming focus events", expand=False))
+
+            if proposed:
+                twhy = Table(title="WHY THESE TRADES — per-trade rationale (compact)")
+                twhy.add_column("ticker", style="bold")
+                twhy.add_column("action")
+                twhy.add_column("bucket")
+                twhy.add_column("score_raw", justify="right")
+                twhy.add_column("score", justify="right")
+                twhy.add_column("dir")
+                for p0 in proposed:
+                    it0 = dict(p0.get("idea") or {})
+                    tkr0 = str(p0.get("ticker") or "")
+                    act0 = "OPTION" if str(p0.get("kind") or "") == "OPEN_OPTION" else "SHARES"
+                    bucket = str(it0.get("thesis_tag") or "neutral")
+                    sraw = it0.get("score_raw")
+                    sw = it0.get("score")
+                    direction = str(it0.get("direction") or "")
+                    twhy.add_row(
+                        tkr0,
+                        act0,
+                        bucket,
+                        f"{float(sraw):.3f}" if isinstance(sraw, (int, float)) else "—",
+                        f"{float(sw):.3f}" if isinstance(sw, (int, float)) else "—",
+                        direction,
+                    )
+                console.print(twhy)
         console.print(
             Panel(
                 (

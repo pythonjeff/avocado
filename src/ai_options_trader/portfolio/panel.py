@@ -38,7 +38,22 @@ def build_macro_panel_dataset(
     Xr = regime_features.sort_index()
 
     idx = Xr.index.intersection(px.index)
-    Xr = Xr.loc[idx].dropna(how="any")
+    Xr = Xr.loc[idx].copy()
+    # IMPORTANT: do NOT drop rows with any NaN across the entire regime matrix.
+    # Some regime families (esp. fiscal / optional series) start later or are best-effort,
+    # and a strict row-wise drop will often wipe out the entire dataset.
+    #
+    # Strategy:
+    # - Drop regime columns with very low coverage (mostly-NaN)
+    # - Forward-fill remaining regime columns (most are low-frequency series merged onto daily grid)
+    # - Drop the remaining leading/trailing NaNs
+    if not Xr.empty:
+        # Keep columns that are present at least this fraction of days.
+        min_col_coverage = 0.60
+        keep_cols = [c for c in Xr.columns if float(Xr[c].notna().mean()) >= float(min_col_coverage)]
+        if keep_cols:
+            Xr = Xr[keep_cols]
+        Xr = Xr.ffill().dropna(how="any")
     px = px.loc[idx]
 
     if Xr.empty:

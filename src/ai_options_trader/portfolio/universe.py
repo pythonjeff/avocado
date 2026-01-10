@@ -45,7 +45,7 @@ DEFAULT_UNIVERSE = PortfolioUniverse(
 STARTER_UNIVERSE = PortfolioUniverse(
     basket_equity=(
         # Equity beta proxies (lower-priced share classes where possible)
-        "SPLG",  # S&P 500 (lower $/share than SPY)
+        "SPY",   # S&P 500 (most universally tradable + deepest options)
         "QQQM",  # Nasdaq-100 (lower $/share than QQQ)
         "IWM",   # Small caps
         # Key macro hedges / diversifiers
@@ -59,12 +59,19 @@ STARTER_UNIVERSE = PortfolioUniverse(
         "SHY",   # 1-3y Treasuries (cash-like)
         "IEF",   # 7-10y Treasuries (belly duration)
         "TLT",   # Long duration
+        "TIP",   # TIPS (inflation-linked duration)
         # Credit
         "HYG",   # HY credit beta
+        "LQD",   # IG credit (quality spread / duration-credit blend)
+        # Simple hedges / distinct equity sleeves (liquid, optionable)
+        "SH",    # -1x S&P 500 (simple equity hedge)
+        "TBT",   # Inverse long duration (rates up)
+        "SMH",   # Semiconductors (growth/duration proxy)
+        "KRE",   # Regional banks (rates/credit transmission)
     ),
     tradable=(
         # Keep tradable superset stable and modest for data pulls
-        "SPLG",
+        "SPY",
         "QQQM",
         "IWM",
         "UUP",
@@ -76,7 +83,13 @@ STARTER_UNIVERSE = PortfolioUniverse(
         "SHY",
         "IEF",
         "TLT",
+        "TIP",
         "HYG",
+        "LQD",
+        "SH",
+        "TBT",
+        "SMH",
+        "KRE",
         # Optional sector tilts (still liquid; may be pricier but useful)
         "XLF",
         "XLE",
@@ -88,7 +101,7 @@ STARTER_UNIVERSE = PortfolioUniverse(
 # Goals:
 # - Highly liquid + optionable tickers (ETFs + a small set of mega-cap stocks)
 # - Add inverse/hedge instruments (not just adjacent clones)
-# - Avoid redundant duplicates (e.g., don't add SPY if we already have SPLG)
+# - Avoid redundant duplicates (e.g., don't add a second S&P 500 wrapper if SPY is already present)
 EXTENDED_UNIVERSE = PortfolioUniverse(
     basket_equity=tuple(
         dict.fromkeys(
