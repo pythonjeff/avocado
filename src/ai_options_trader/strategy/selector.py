@@ -92,14 +92,18 @@ def choose_best_option(
         if sp > strat.max_spread_pct:
             continue
 
-        # Alpaca's options snapshot (alpaca-py) does not always include open interest / volume.
-        # Only enforce these thresholds when the values are present.
-        if c.oi is not None and c.oi < strat.min_open_interest:
+        # Liquidity rule (global):
+        # Only recommend contracts with tight spreads AND high liquidity.
+        # Passes if (OI >= min_open_interest) OR (volume >= min_volume).
+        # If both OI and volume are missing, treat as not tradable.
+        oi_val = int(c.oi) if c.oi is not None else None
+        vol_val = int(c.volume) if c.volume is not None else None
+        oi_ok = (oi_val is not None) and (oi_val >= int(strat.min_open_interest))
+        vol_ok = (vol_val is not None) and (vol_val >= int(strat.min_volume))
+        if not (oi_ok or vol_ok):
             continue
-        if c.volume is not None and c.volume < strat.min_volume:
-            continue
-        oi = int(c.oi) if c.oi is not None else 0
-        vol = int(c.volume) if c.volume is not None else 0
+        oi = int(oi_val or 0)
+        vol = int(vol_val or 0)
 
         per_contract_cost = mid * 100.0
         size = size_by_budget(budget, per_contract_cost, risk)
@@ -200,9 +204,11 @@ def diagnose_selection(
             continue
         d.spread_ok += 1
 
-        if c.oi is not None and c.oi < strat.min_open_interest:
-            continue
-        if c.volume is not None and c.volume < strat.min_volume:
+        oi_val = int(c.oi) if c.oi is not None else None
+        vol_val = int(c.volume) if c.volume is not None else None
+        oi_ok = (oi_val is not None) and (oi_val >= int(strat.min_open_interest))
+        vol_ok = (vol_val is not None) and (vol_val >= int(strat.min_volume))
+        if not (oi_ok or vol_ok):
             continue
         d.liquidity_ok += 1
 

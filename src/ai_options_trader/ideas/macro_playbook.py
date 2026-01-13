@@ -20,6 +20,10 @@ class PlaybookIdea:
     best: float  # max fwd return (%)
     score: float  # ranking scalar
     notes: dict
+    # Optional benchmark-relative stats to reduce "everything drifts up" bias.
+    benchmark: str | None = None
+    exp_return_excess: float | None = None  # mean fwd (ticker - benchmark) (%)
+    hit_rate_excess: float | None = None  # P(fwd_excess > 0)
 
 
 def _zscore_frame(X: pd.DataFrame) -> pd.DataFrame:
@@ -100,6 +104,7 @@ def rank_macro_playbook(
     k: int = 250,
     lookback_days: int = 252 * 7,
     min_matches: int = 60,
+    benchmark: str | None = None,
     asof: pd.Timestamp | None = None,
 ) -> list[PlaybookIdea]:
     """
@@ -123,6 +128,9 @@ def rank_macro_playbook(
 
     fwd = build_forward_returns(px, horizon_days=int(horizon_days))
     ideas: list[PlaybookIdea] = []
+    bench = (benchmark or "").strip().upper() or None
+    if bench is not None and bench not in fwd.columns:
+        bench = None
 
     for t in tickers:
         if t not in fwd.columns:
@@ -136,10 +144,26 @@ def rank_macro_playbook(
         hit = float((s > 0).mean())
         worst = float(s.min())
         best = float(s.max())
-        direction = "bullish" if exp_ret >= 0 else "bearish"
+        exp_ex = None
+        hit_ex = None
+        direction_basis = exp_ret
+        if bench is not None and bench != t:
+            sb = pd.to_numeric(fwd.loc[nbrs, bench], errors="coerce").dropna()
+            # Align on common analog dates
+            common = s.index.intersection(sb.index)
+            if len(common) >= int(min_matches):
+                ex = (s.loc[common] - sb.loc[common]).dropna()
+                if len(ex) >= int(min_matches):
+                    exp_ex = float(ex.mean())
+                    hit_ex = float((ex > 0).mean())
+                    direction_basis = exp_ex
+
+        direction = "bullish" if float(direction_basis) >= 0 else "bearish"
 
         # Score: reward magnitude + consistency, penalize ugly tails a bit.
-        score = (abs(exp_ret) * (0.5 + hit)) - 0.05 * abs(worst)
+        h_use = hit_ex if hit_ex is not None else hit
+        r_use = exp_ex if exp_ex is not None else exp_ret
+        score = (abs(float(r_use)) * (0.5 + float(h_use))) - 0.05 * abs(worst)
 
         ideas.append(
             PlaybookIdea(
@@ -150,10 +174,18 @@ def rank_macro_playbook(
                 exp_return=exp_ret,
                 median_return=med,
                 hit_rate=hit,
+                benchmark=bench,
+                exp_return_excess=exp_ex,
+                hit_rate_excess=hit_ex,
                 worst=worst,
                 best=best,
                 score=float(score),
-                notes={"asof": str(asof.date()), "neighbors_start": str(nbrs.min().date()), "neighbors_end": str(nbrs.max().date())},
+                notes={
+                    "asof": str(asof.date()),
+                    "neighbors_start": str(nbrs.min().date()),
+                    "neighbors_end": str(nbrs.max().date()),
+                    "benchmark": bench,
+                },
             )
         )
 

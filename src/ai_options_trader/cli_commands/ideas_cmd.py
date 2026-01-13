@@ -6,6 +6,8 @@ from rich import print
 from ai_options_trader.config import StrategyConfig, RiskConfig, load_settings
 from ai_options_trader.data.alpaca import make_clients, fetch_option_chain, to_candidates
 from ai_options_trader.strategy.selector import choose_best_option
+from ai_options_trader.options.targets import required_underlying_move_for_profit_pct, format_required_move
+from ai_options_trader.data.quotes import fetch_stock_last_prices
 
 
 def register(ideas_app: typer.Typer) -> None:
@@ -214,11 +216,28 @@ def register(ideas_app: typer.Typer) -> None:
                         profit_if = f"profit if und < ${be:.2f} @ expiry"
                 except Exception:
                     profit_if = "—"
+
+                # Required underlying move for +5% option profit (delta-only approximation)
+                und_live = None
+                try:
+                    last_px, _asof_map, _src = fetch_stock_last_prices(settings=settings, symbols=[underlying], max_symbols_for_live=5)
+                    und_live = last_px.get(underlying)
+                except Exception:
+                    und_live = None
+                und_for_calc = und_live if und_live is not None else und_px
+                move5 = required_underlying_move_for_profit_pct(
+                    opt_entry_price=float(best.mid),
+                    delta=float(best.delta),
+                    profit_pct=0.05,
+                    underlying_px=und_for_calc,
+                    opt_type=str(best.opt_type),
+                )
                 c.print(
                     Panel(
                         f"{underlying}: {action}\n"
                         f"Selected: {best.symbol} dte={best.dte_days} mid=${best.mid:.2f} Δ={best.delta:.3f}\n"
-                        f"Underlying≈{('—' if und_px is None else f'${und_px:.2f}')}; {profit_if}\n"
+                        f"Underlying≈{('—' if und_for_calc is None else f'${und_for_calc:.2f}')}  "
+                        f"Move for +5% option P&L≈{format_required_move(move5)}; {profit_if}\n"
                         f"Max contracts by risk sizing: {best.size.max_contracts} (budget≈${best.size.budget_usd:,.2f})",
                         title="Order preview",
                         expand=False,
@@ -345,6 +364,7 @@ def register(ideas_app: typer.Typer) -> None:
                         want=want,  # type: ignore[arg-type]
                         price_basis=pb,  # type: ignore[arg-type]
                         min_price=0.05,
+                        max_spread_pct=float(max_spread_pct),
                         require_delta=True,
                     )
                     best = pick_best_affordable(opts, target_abs_delta=float(target_abs_delta), max_spread_pct=float(max_spread_pct))

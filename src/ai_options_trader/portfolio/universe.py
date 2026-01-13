@@ -213,6 +213,45 @@ EXTENDED_UNIVERSE = PortfolioUniverse(
 )
 
 
+# Housing / MBS basket: focused sleeve for housing cycle + mortgage rates + mortgage-backed securities proxies.
+HOUSING_UNIVERSE = PortfolioUniverse(
+    basket_equity=(
+        # Mortgage-backed securities (agency MBS proxy ETFs)
+        "MBB",   # iShares MBS ETF
+        "VMBS",  # Vanguard MBS ETF
+        # Housing / builders
+        "ITB",   # US home construction
+        "XHB",   # homebuilders (broader)
+        # REITs / real estate beta
+        "VNQ",   # Vanguard REIT
+        "IYR",   # iShares US Real Estate
+        # Inverse real estate (non-option expressions)
+        "REK",   # -1x real estate
+        "SRS",   # -2x real estate (more aggressive / more decay)
+        # Rate anchors / hedges
+        "IEF",   # 7-10y Treasuries
+        "TLT",   # long duration
+        "SHY",   # front-end / cash proxy
+        # Equity beta baseline
+        "SPY",
+    ),
+    tradable=(
+        "MBB",
+        "VMBS",
+        "ITB",
+        "XHB",
+        "VNQ",
+        "IYR",
+        "REK",
+        "SRS",
+        "IEF",
+        "TLT",
+        "SHY",
+        "SPY",
+    ),
+)
+
+
 def get_universe(name: str) -> PortfolioUniverse:
     """
     Resolve a named universe:
@@ -223,6 +262,8 @@ def get_universe(name: str) -> PortfolioUniverse:
     n = (name or "starter").strip().lower()
     if n.startswith("e"):
         return EXTENDED_UNIVERSE
+    if n.startswith("h"):
+        return HOUSING_UNIVERSE
     if n.startswith("d"):
         return DEFAULT_UNIVERSE
     return STARTER_UNIVERSE

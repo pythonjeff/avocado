@@ -6,7 +6,7 @@ from ai_options_trader.data.alpaca import OptionCandidate
 from ai_options_trader.options.budget_scan import affordable_options_for_ticker, pick_best_affordable
 
 
-def _c(symbol: str, *, bid: float, ask: float, delta: float | None) -> OptionCandidate:
+def _c(symbol: str, *, bid: float, ask: float, delta: float | None, oi: int | None = 500, volume: int | None = 500) -> OptionCandidate:
     return OptionCandidate(
         symbol=symbol,
         opt_type="",
@@ -18,8 +18,8 @@ def _c(symbol: str, *, bid: float, ask: float, delta: float | None) -> OptionCan
         theta=None,
         vega=None,
         iv=None,
-        oi=None,
-        volume=None,
+        oi=oi,
+        volume=volume,
         bid=bid,
         ask=ask,
         last=None,

@@ -9,6 +9,8 @@ from rich.table import Table
 
 from ai_options_trader.config import load_settings
 from ai_options_trader.data.alpaca import make_clients
+from ai_options_trader.options.targets import required_underlying_move_for_profit_pct, format_required_move
+from ai_options_trader.strategies.sleeves import resolve_sleeves
 
 
 def _to_float(x) -> float | None:
@@ -38,6 +40,21 @@ def register(autopilot_app: typer.Typer) -> None:
             help="playbook|analog|ml (analog adds factor-momentum features to regime similarity; ml uses panel model forecast)",
         ),
         basket: str = typer.Option("starter", "--basket", help="starter|extended (universe for idea generation)"),
+        sleeves: str = typer.Option(
+            "",
+            "--sleeves",
+            help="Optional: multi-sleeve mode (comma/space-separated): macro, vol, ai-bubble. If omitted, uses legacy macro-only pipeline.",
+        ),
+        predictions: bool = typer.Option(
+            False,
+            "--predictions",
+            help="Predictions-only mode: output predicted direction/ranks for the basket(s) (no budgeting, no aggregator, no trade selection, no execution).",
+        ),
+        top_predictions: int = typer.Option(
+            15,
+            "--top-predictions",
+            help="(predictions mode) How many tickers per sleeve to print.",
+        ),
         feature_set: str = typer.Option("fci", "--feature-set", help="full|fci (used when --engine ml)"),
         interaction_mode: str = typer.Option("whitelist", "--interaction-mode", help="none|whitelist|all (used when --engine ml)"),
         whitelist_extra: str = typer.Option(
@@ -143,6 +160,251 @@ def register(autopilot_app: typer.Typer) -> None:
             thesis_s = "none"
         min_new_trades_n = max(0, int(min_new_trades))
         max_new_trades_n = max(int(max_new_trades), min_new_trades_n if min_new_trades_n > 0 else 0)
+
+        # -------------------------------------------------------------------
+        # Predictions-only mode: run the shared sleeve pipeline in "predict" mode and exit.
+        # This intentionally ignores budgeting and does NOT propose trades.
+        # -------------------------------------------------------------------
+        if bool(predictions):
+            # Lazy import so test collection doesn't require Alpaca SDK.
+            from ai_options_trader.strategies.pipeline import run_sleeves_pipeline
+
+            sleeve_names: list[str] = []
+            if str(sleeves or "").strip():
+                sleeve_names = [x.strip() for x in str(sleeves).replace(",", " ").split() if x.strip()]
+            if not sleeve_names:
+                sleeve_names = ["macro"]
+            cfgs = resolve_sleeves(sleeve_names)
+
+            runs, meta = run_sleeves_pipeline(
+                settings=settings,
+                sleeves=cfgs,
+                basket=str(basket),
+                engine=str(engine),
+                start=str(start),
+                refresh=bool(refresh),
+                # Predictions should always print something; don't filter out negative scores here.
+                require_positive_score=False,
+                with_options=False,
+                max_premium_usd=float(max_premium_usd),
+                min_days=int(min_days),
+                max_days=int(max_days),
+                target_abs_delta=float(target_abs_delta),
+                max_spread_pct=float(max_spread_pct),
+                shares_budget_usd=float(shares_budget_usd),
+                predictions_only=True,
+                max_candidates_per_sleeve=max(1, int(top_predictions)),
+                data_client=None,
+            )
+            if meta.get("status") != "ok":
+                console.print(Panel(f"Predictions pipeline status: {meta}", title="Predictions", expand=False))
+                raise typer.Exit(code=1)
+
+            t = Table(title=f"Predictions (no trades) — engine={meta.get('engine')} asof={meta.get('asof')} basket={meta.get('basket')}")
+            t.add_column("sleeve", style="bold")
+            t.add_column("ticker", style="bold")
+            t.add_column("dir", style="bold")
+            t.add_column("score", justify="right")
+            t.add_column("expRet", justify="right")
+            t.add_column("prob", justify="right")
+            t.add_column("expX", justify="right")
+            t.add_column("probX", justify="right")
+            t.add_column("risk_factors")
+            for r in runs:
+                shown = r.candidates[: max(1, int(top_predictions))]
+                for c in shown:
+                    expx = None
+                    probx = None
+                    try:
+                        m = c.meta if isinstance(c.meta, dict) else {}
+                        # The sleeve pipeline stores the full PlaybookIdea-derived values only in the object fields,
+                        # but we can access them via attached notes when present.
+                        # For MVP, we reconstruct from the standardized fields when available.
+                        # (expRet/prob already printed; excess values are provided when benchmark is enabled.)
+                        # NOTE: expRet/prob refer to absolute stats; expX/probX refer to excess vs benchmark.
+                        expx = m.get("exp_return_excess")  # may be missing
+                        probx = m.get("hit_rate_excess")
+                    except Exception:
+                        expx = None
+                        probx = None
+                    t.add_row(
+                        c.sleeve,
+                        c.ticker,
+                        ("UP" if str(c.direction).lower().startswith("bull") else "DOWN"),
+                        f"{float(c.score):.2f}",
+                        (f"{float(c.expRet):+.2f}%" if c.expRet is not None else "—"),
+                        (f"{float(c.prob):.0%}" if c.prob is not None else "—"),
+                        (f"{float(expx):+.2f}%" if isinstance(expx, (int, float)) else "—"),
+                        (f"{float(probx):.0%}" if isinstance(probx, (int, float)) else "—"),
+                        ", ".join(c.risk_factors or ()),
+                    )
+            console.print(t)
+            raise typer.Exit(code=0)
+
+        # -------------------------------------------------------------------
+        # Multi-sleeve mode (MVP): shared sleeve pipeline + portfolio aggregator.
+        # Triggered only when more than one sleeve is specified, or when a non-macro sleeve is specified.
+        # Backward compatible: `--sleeves macro` (or empty) runs the legacy path below.
+        # -------------------------------------------------------------------
+        sleeve_names: list[str] = []
+        if str(sleeves or "").strip():
+            sleeve_names = [x.strip() for x in str(sleeves).replace(",", " ").split() if x.strip()]
+        want_multi = False
+        if sleeve_names:
+            low = [x.lower() for x in sleeve_names]
+            want_multi = (len(low) > 1) or (len(low) == 1 and low[0] not in {"macro", "core"})
+
+        if want_multi:
+            # Lazy imports here so test collection doesn't require the Alpaca SDK.
+            from ai_options_trader.strategies.pipeline import run_sleeves_pipeline
+            from ai_options_trader.strategies.aggregator import PortfolioAggregator
+
+            # Safety checks (mirror the existing guard rails)
+            live_ok = bool(live) and (not bool(settings.alpaca_paper))
+            if execute and (not settings.alpaca_paper) and (not live_ok):
+                console.print(
+                    Panel(
+                        "[red]Refusing to execute[/red] because ALPACA_PAPER is false.\n"
+                        "If you intend LIVE trading, re-run with [b]--live --execute[/b].",
+                        title="Safety",
+                        expand=False,
+                    )
+                )
+                raise typer.Exit(code=1)
+            if execute and live_ok:
+                console.print(
+                    Panel(
+                        "[yellow]LIVE MODE ENABLED[/yellow]\n"
+                        "Orders will be submitted to your LIVE Alpaca account.\n"
+                        "You will be asked to confirm each action.",
+                        title="Safety",
+                        expand=False,
+                    )
+                )
+                if not typer.confirm("Confirm LIVE mode (ALPACA_PAPER=false) and proceed?", default=False):
+                    raise typer.Exit(code=0)
+                if not typer.confirm("Second confirmation: proceed with LIVE trading actions in this run?", default=False):
+                    raise typer.Exit(code=0)
+
+            cfgs = resolve_sleeves(sleeve_names)
+            runs, meta = run_sleeves_pipeline(
+                settings=settings,
+                sleeves=cfgs,
+                basket=str(basket),
+                engine=str(engine),
+                start=str(start),
+                refresh=bool(refresh),
+                require_positive_score=bool(require_positive_score),
+                with_options=bool(with_options),
+                max_premium_usd=float(max_premium_usd),
+                min_days=int(min_days),
+                max_days=int(max_days),
+                target_abs_delta=float(target_abs_delta),
+                max_spread_pct=float(max_spread_pct),
+                shares_budget_usd=float(shares_budget_usd),
+                max_candidates_per_sleeve=max(8, int(max_new_trades_n) * 4),
+                data_client=_data,
+            )
+            if meta.get("status") != "ok":
+                console.print(Panel(f"Multi-sleeve pipeline status: {meta}", title="Sleeves", expand=False))
+                raise typer.Exit(code=1)
+
+            # Aggregate with sleeve budgets
+            all_cands = [c for r in runs for c in r.candidates]
+            sleeve_budget_pct = {c.name: float(c.risk_budget_pct) for c in cfgs}
+            agg = PortfolioAggregator(factor_cap=1)
+            res = agg.aggregate(candidates=all_cands, total_budget_usd=float(max(0.0, cash)), sleeve_budgets_pct=sleeve_budget_pct)
+
+            # Print combined table (compare sleeves side-by-side)
+            t = Table(title=f"Autopilot (multi-sleeve) — engine={meta.get('engine')} asof={meta.get('asof')} cash≈${cash:,.2f}")
+            t.add_column("sleeve", style="bold")
+            t.add_column("action", style="bold")
+            t.add_column("ticker", style="bold")
+            t.add_column("score", justify="right")
+            t.add_column("expRet", justify="right")
+            t.add_column("prob", justify="right")
+            t.add_column("expr")
+            t.add_column("risk_factors")
+            t.add_column("est_cost", justify="right")
+            for c in res.selected[: max(1, int(max_new_trades_n))]:
+                t.add_row(
+                    c.sleeve,
+                    c.action,
+                    c.ticker,
+                    f"{float(c.score):.2f}",
+                    (f"{float(c.expRet):+.2f}%" if c.expRet is not None else "—"),
+                    (f"{float(c.prob):.0%}" if c.prob is not None else "—"),
+                    str(c.expr or "—"),
+                    ", ".join(c.risk_factors or ()),
+                    (f"${float(c.est_cost_usd):,.2f}" if c.est_cost_usd is not None else "—"),
+                )
+            console.print(t)
+
+            if res.dropped:
+                console.print(Panel(f"Dropped {len(res.dropped)} candidate(s) due to caps/budgets.", title="Aggregator", expand=False))
+
+            # Optional LLM overlay (post-aggregation; MVP keeps one overlay call)
+            if bool(llm):
+                try:
+                    from ai_options_trader.llm.macro_recommendation import llm_macro_recommendation
+
+                    memo = llm_macro_recommendation(
+                        settings=settings,
+                        asof=str(meta.get("asof") or ""),
+                        regime_features=dict(meta.get("regime_features") or {}),
+                        candidates=[c.__dict__ for c in all_cands],
+                        budgeted_recommendations=[c.__dict__ for c in res.selected[: max(1, int(max_new_trades_n))]],
+                        account={"cash": cash, "equity": equity, "buying_power": bp},
+                        positions=None,
+                        risk_watch=None,
+                        news=None,
+                        require_decision_line=bool(llm_gate),
+                        model=(llm_model.strip() or None),
+                        temperature=float(llm_temperature),
+                    )
+                    console.print(Panel(memo, title="LLM memo (post-aggregation)", expand=False))
+                except Exception as e:
+                    console.print(Panel(f"[yellow]LLM unavailable[/yellow]\n{type(e).__name__}: {e}", title="LLM", expand=False))
+
+            # Optional execution (confirmation-gated). MVP: OPEN_OPTION qty=1, OPEN_SHARES qty from meta.
+            if bool(execute):
+                from ai_options_trader.execution.alpaca import submit_option_order, submit_equity_order
+
+                label = "LIVE" if live_ok else "PAPER"
+                for c in res.selected[: max(1, int(max_new_trades_n))]:
+                    if c.action == "OPEN_OPTION" and c.expr:
+                        sym = str(c.expr)
+                        limit_px = None
+                        try:
+                            leg = (c.meta or {}).get("option_leg") if isinstance(c.meta, dict) else None
+                            limit_px = float(leg.get("price")) if isinstance(leg, dict) and leg.get("price") else None
+                        except Exception:
+                            limit_px = None
+                        if limit_px is None:
+                            console.print(f"[yellow]Skip[/yellow] {sym}: missing limit price (option snapshot incomplete).")
+                            continue
+                        if not typer.confirm(f"Submit {label} option order: BUY 1 {sym} (limit≈{limit_px:.2f})?", default=False):
+                            continue
+                        resp = submit_option_order(trading=trading, symbol=sym, qty=1, side="buy", limit_price=float(limit_px), tif="day")
+                        console.print(f"[green]Submitted[/green]: {resp}")
+                    elif c.action == "OPEN_SHARES":
+                        qty = 1
+                        limit_px = None
+                        try:
+                            qty = int((c.meta or {}).get("qty") or 1)
+                            limit_px = (c.meta or {}).get("limit")
+                            limit_px = float(limit_px) if limit_px is not None else None
+                        except Exception:
+                            qty = 1
+                            limit_px = None
+                        if not typer.confirm(f"Submit {label} equity order: BUY {qty} {c.ticker} (limit≈{limit_px if limit_px else 'mkt'})?", default=False):
+                            continue
+                        resp = submit_equity_order(trading=trading, symbol=str(c.ticker), qty=int(qty), side="buy", limit_price=limit_px, tif="day")
+                        console.print(f"[green]Submitted[/green]: {resp}")
+                    else:
+                        console.print(f"[dim]Skip unsupported action in MVP: {c.action}[/dim]")
+
+            raise typer.Exit(code=0)
 
         # Budgeting: stay within available cash.
         budget_total = float(max(0.0, cash))
@@ -915,6 +1177,7 @@ def register(autopilot_app: typer.Typer) -> None:
                         want=want,  # type: ignore[arg-type]
                         price_basis=pb,  # type: ignore[arg-type]
                         min_price=0.05,
+                        max_spread_pct=float(max_spread_pct),
                         require_delta=True,
                     )
                     best = pick_best_affordable(opts, target_abs_delta=float(target_abs_delta), max_spread_pct=float(max_spread_pct))
@@ -1245,6 +1508,7 @@ def register(autopilot_app: typer.Typer) -> None:
             t2.add_column("hit/prob", justify="right")
             t2.add_column("expr")
             t2.add_column("und≈", justify="right")
+            t2.add_column("move@+5%", justify="right")
             t2.add_column("profit if", justify="right")
             t2.add_column("est_cost", justify="right")
             for p in plan_proposed:
@@ -1277,11 +1541,19 @@ def register(autopilot_app: typer.Typer) -> None:
                                 profit_if = f"<{be:.2f}"
                     except Exception:
                         profit_if = "—"
+                    move5 = required_underlying_move_for_profit_pct(
+                        opt_entry_price=float(leg.get("price") or 0.0),
+                        delta=(float(leg.get("delta")) if leg.get("delta") is not None else None),
+                        profit_pct=0.05,
+                        underlying_px=und_px,
+                        opt_type=str(leg.get("type") or ""),
+                    )
                 else:
                     expr = f"qty={p['qty']} limit≈{p['limit']:.2f}"
                     act = "BUY SHARES"
                     und_px = float(p.get("limit") or 0.0) or None
                     profit_if = "—"
+                    move5 = None
                 score = it.get("score")
                 exp_ret = it.get("exp_return")
                 if exp_ret is None:
@@ -1297,6 +1569,7 @@ def register(autopilot_app: typer.Typer) -> None:
                     f"{float(hp):.0%}" if hp is not None else "—",
                     expr,
                     "—" if und_px is None else f"${und_px:.2f}",
+                    format_required_move(move5),
                     profit_if,
                     f"${float(p.get('est_cost_usd') or 0.0):.2f}",
                 )

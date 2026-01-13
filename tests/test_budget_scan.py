@@ -14,6 +14,8 @@ def _c(
     last: float | None = None,
     delta: float | None = None,
     iv: float | None = None,
+    oi: int | None = 500,
+    volume: int | None = 500,
 ) -> OptionCandidate:
     return OptionCandidate(
         symbol=symbol,
@@ -26,8 +28,8 @@ def _c(
         theta=None,
         vega=None,
         iv=iv,
-        oi=None,
-        volume=None,
+        oi=oi,
+        volume=volume,
         bid=bid,
         ask=ask,
         last=last,

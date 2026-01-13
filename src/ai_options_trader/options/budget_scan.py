@@ -47,6 +47,11 @@ def affordable_options_for_ticker(
     price_basis: PriceBasis = "ask",
     min_price: float = 0.05,
     require_delta: bool = True,
+    # Liquidity guardrails
+    max_spread_pct: float = 0.30,
+    min_open_interest: int = 100,
+    min_volume: int = 100,
+    require_liquidity: bool = True,
     today: date | None = None,
 ) -> Sequence[AffordableOption]:
     """
@@ -95,6 +100,21 @@ def affordable_options_for_ticker(
             continue
 
         sp = _spread_pct(c.bid, c.ask, mid)
+        # Tight spread requirement: if we can compute spread, enforce max.
+        # If spread is not computable, treat as not tradable (we can't evaluate the bid/ask).
+        if sp is None or float(sp) > float(max_spread_pct):
+            continue
+
+        if bool(require_liquidity):
+            # Passes if (OI >= min_open_interest) OR (volume >= min_volume).
+            # If both missing, treat as not tradable.
+            oi_val = int(c.oi) if c.oi is not None else None
+            vol_val = int(c.volume) if c.volume is not None else None
+            oi_ok = (oi_val is not None) and (oi_val >= int(min_open_interest))
+            vol_ok = (vol_val is not None) and (vol_val >= int(min_volume))
+            if not (oi_ok or vol_ok):
+                continue
+
         out.append(
             AffordableOption(
                 ticker=ticker,
@@ -143,4 +163,38 @@ def pick_best_affordable(
 
     return sorted(opts, key=_key)[0]
 
+
+def pick_best_delta_theta(
+    opts: Sequence[AffordableOption],
+    *,
+    target_abs_delta: float = 0.30,
+    delta_weight: float = 1.0,
+    theta_weight: float = 1.0,
+) -> AffordableOption | None:
+    """
+    Pick a single contract optimized for delta + theta (best-effort).
+
+    Interpretation for long options:
+    - Prefer |delta| close to target_abs_delta (responsiveness / moneyness control)
+    - Prefer theta closer to 0 (lower time decay; theta is typically negative for long options)
+
+    This assumes spread filtering has already happened upstream.
+    """
+    if not opts:
+        return None
+
+    def _theta_penalty(th: float | None) -> float:
+        # Theta is usually negative; we want small magnitude (closer to 0).
+        if th is None:
+            return 1e9
+        return abs(float(th))
+
+    def _key(o: AffordableOption) -> tuple[float, float]:
+        dd = abs(abs(float(o.delta)) - float(target_abs_delta)) if o.delta is not None else 1e9
+        tp = _theta_penalty(o.theta)
+        score = float(delta_weight) * dd + float(theta_weight) * tp
+        # Secondary tiebreaker: cheaper premium
+        return (score, float(o.premium_usd))
+
+    return sorted(opts, key=_key)[0]
 

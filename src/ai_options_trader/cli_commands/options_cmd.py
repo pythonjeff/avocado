@@ -14,13 +14,17 @@ from ai_options_trader.data.alpaca import fetch_option_chain, make_clients, to_c
 from ai_options_trader.data.market import fetch_equity_daily_closes
 from ai_options_trader.execution.alpaca import submit_option_order
 from ai_options_trader.options.historical import fetch_option_bar_volumes
-from ai_options_trader.options.budget_scan import affordable_options_for_ticker, pick_best_affordable
+from ai_options_trader.options.budget_scan import affordable_options_for_ticker, pick_best_affordable, pick_best_delta_theta
 from ai_options_trader.options.most_traded import most_traded_options
 from ai_options_trader.options.moonshot import rank_moonshots, rank_moonshots_unconditional
 from ai_options_trader.llm.moonshot_theory import llm_moonshot_theory
+from ai_options_trader.options.targets import required_underlying_move_for_profit_pct, format_required_move
 from ai_options_trader.regimes.feature_matrix import build_regime_feature_matrix
 from ai_options_trader.universe.sp500 import load_sp500_universe
 from ai_options_trader.portfolio.universe import STARTER_UNIVERSE
+from ai_options_trader.altdata.fmp import build_ticker_dossier
+from ai_options_trader.data.quotes import fetch_stock_last_prices
+from ai_options_trader.strategies.sleeves import resolve_sleeves
 
 
 def register(options_app: typer.Typer) -> None:
@@ -44,7 +48,7 @@ def register(options_app: typer.Typer) -> None:
         sort: str = typer.Option(
             "volume",
             "--sort",
-            help="volume|open_interest|delta|abs_delta|gamma|theta|vega|iv",
+            help="volume|open_interest|delta|abs_delta|gamma|theta|vega|iv|hf (hf=spread+delta+greeks when OI/vol missing)",
         ),
         mode: str = typer.Option("snapshot", "--mode", help="snapshot|historical (last-day bars volume)"),
         lookback_days: int = typer.Option(1, "--lookback-days", help="(historical) Lookback window in days"),
@@ -64,6 +68,8 @@ def register(options_app: typer.Typer) -> None:
         s = sort.strip().lower()
         if s.startswith("open"):
             sort_key = "open_interest"
+        elif s == "hf":
+            sort_key = "hf"
         elif s in {"delta", "abs_delta", "gamma", "theta", "vega", "iv"}:
             sort_key = s
         else:
@@ -121,6 +127,17 @@ def register(options_app: typer.Typer) -> None:
                 )
                 raise typer.Exit(code=2)
 
+        # If Alpaca isn't providing volume/OI, default "most traded" becomes meaningless.
+        # Auto-fallback to hedge-fund-style greeks ranking when user asked for volume.
+        vol_missing = sum(1 for c in candidates if c.volume is None)
+        oi_missing = sum(1 for c in candidates if c.oi is None)
+        if sort_key == "volume" and candidates and vol_missing == len(candidates) and oi_missing == len(candidates):
+            sort_key = "hf"
+            print(
+                "[yellow]Note:[/yellow] Option chain snapshots did not include volume/OI, so `--sort volume` is not usable.\n"
+                "Falling back to `--sort hf` (tight quotes + delta + greeks)."
+            )
+
         ranked = most_traded_options(
             candidates,
             ticker=ticker,
@@ -133,8 +150,6 @@ def register(options_app: typer.Typer) -> None:
             today=date.today(),
         )
 
-        vol_missing = sum(1 for c in candidates if c.volume is None)
-        oi_missing = sum(1 for c in candidates if c.oi is None)
         delta_missing = sum(1 for c in candidates if c.delta is None)
         iv_missing = sum(1 for c in candidates if c.iv is None)
         print(
@@ -219,6 +234,223 @@ def register(options_app: typer.Typer) -> None:
 
         Console().print(tbl)
 
+    @options_app.command("pick")
+    def options_pick(
+        ticker: str = typer.Option(..., "--ticker", "-t", help="Underlying ticker, e.g. XHB"),
+        want: str = typer.Option("put", "--want", help="call|put"),
+        max_premium_usd: float = typer.Option(
+            0.0,
+            "--max-premium",
+            help="Max total premium budget (USD). If 0, compute from Alpaca cash via --budget-pct.",
+        ),
+        budget_pct: float = typer.Option(
+            0.10,
+            "--budget-pct",
+            help="(when --max-premium=0) Budget as % of Alpaca account cash (e.g. 0.10 = 10%).",
+        ),
+        min_days: int = typer.Option(30, "--min-days", help="Min DTE"),
+        max_days: int = typer.Option(120, "--max-days", help="Max DTE"),
+        target_abs_delta: float = typer.Option(0.30, "--target-abs-delta", help="Target |delta|"),
+        # Optimization weights
+        delta_weight: float = typer.Option(1.0, "--delta-weight", help="Weight on delta distance (lower is better)"),
+        theta_weight: float = typer.Option(1.0, "--theta-weight", help="Weight on |theta| (lower decay is better)"),
+        # Pricing / liquidity
+        price_basis: str = typer.Option("ask", "--price-basis", help="ask|mid|last (premium basis)"),
+        min_price: float = typer.Option(0.05, "--min-price", help="Minimum option price"),
+        max_spread_pct: float = typer.Option(0.30, "--max-spread-pct", help="Require spread <= this (fraction of mid)"),
+        require_liquidity: bool = typer.Option(
+            True,
+            "--require-liquidity/--no-require-liquidity",
+            help="Require OI/volume thresholds when available. If your data source does not provide OI/volume, use --no-require-liquidity.",
+        ),
+        execute: bool = typer.Option(False, "--execute", help="If set, can submit the order after confirmation (paper by default; use --live for live)"),
+        live: bool = typer.Option(False, "--live", help="Allow LIVE execution when ALPACA_PAPER is false (guarded with extra confirmations)"),
+    ):
+        """
+        Pick ONE option contract under a max premium, optimized for:
+        - |delta| close to target
+        - low theta decay (theta closer to 0)
+
+        This is a scanner/picker only; it does not place orders.
+        """
+        w = (want or "put").strip().lower()
+        if w not in {"call", "put"}:
+            w = "put"
+        pb = price_basis.strip().lower()
+        if pb not in {"ask", "mid", "last"}:
+            pb = "ask"
+
+        settings = load_settings()
+        trading, data = make_clients(settings)
+
+        live_ok = bool(live) and (not bool(settings.alpaca_paper))
+        if execute and (not settings.alpaca_paper) and (not live_ok):
+            Console().print(
+                Panel(
+                    "[red]Refusing to execute[/red] because ALPACA_PAPER is false.\n"
+                    "If you intend LIVE trading, re-run with [b]--live --execute[/b].",
+                    title="Safety",
+                    expand=False,
+                )
+            )
+            raise typer.Exit(code=1)
+        if execute and live_ok:
+            Console().print(
+                Panel(
+                    "[yellow]LIVE MODE ENABLED[/yellow]\n"
+                    "Orders will be submitted to your LIVE Alpaca account.\n"
+                    "You will be asked to confirm again before submission.",
+                    title="Safety",
+                    expand=False,
+                )
+            )
+            if not typer.confirm("Confirm LIVE mode (ALPACA_PAPER=false) and proceed?", default=False):
+                raise typer.Exit(code=0)
+            if not typer.confirm("Second confirmation: proceed with LIVE trading now?", default=False):
+                raise typer.Exit(code=0)
+
+        # Dynamic budget: fetch Alpaca cash FIRST (user intent) and derive budget when not explicitly provided.
+        if float(max_premium_usd) <= 0:
+            cash = 0.0
+            try:
+                acct = trading.get_account()
+                cash = float(getattr(acct, "cash", 0.0) or 0.0)
+            except Exception:
+                cash = 0.0
+            pct = float(max(0.0, min(1.0, float(budget_pct))))
+            max_premium_usd = float(max(0.0, pct * cash))
+            print(f"[dim]Budget: {pct:.0%} of cash (${cash:,.2f}) → max_premium=${max_premium_usd:,.2f}[/dim]")
+            if max_premium_usd <= 0:
+                print("[yellow]No budget available[/yellow] (cash≈$0). Use --max-premium to override.")
+                raise typer.Exit(code=0)
+
+        chain = fetch_option_chain(data, ticker, feed=settings.alpaca_options_feed)
+        candidates = list(to_candidates(chain, ticker))
+        if not candidates:
+            print(f"[yellow]No option candidates returned[/yellow] for {ticker}. Check your data entitlements/feed.")
+            raise typer.Exit(code=0)
+
+        def _scan(require_liq: bool):
+            return affordable_options_for_ticker(
+                candidates,
+                ticker=ticker.upper(),
+                max_premium_usd=float(max_premium_usd),
+                min_dte_days=int(min_days),
+                max_dte_days=int(max_days),
+                want=w,  # type: ignore[arg-type]
+                price_basis=pb,  # type: ignore[arg-type]
+                min_price=float(min_price),
+                max_spread_pct=float(max_spread_pct),
+                require_delta=True,
+                require_liquidity=bool(require_liq),
+                today=date.today(),
+            )
+
+        opts = _scan(bool(require_liquidity))
+        # If OI/volume are missing, strict liquidity can produce zero options. Fall back to greeks+spread only.
+        if not opts and bool(require_liquidity):
+            oi_missing = sum(1 for c in candidates if c.oi is None)
+            vol_missing = sum(1 for c in candidates if c.volume is None)
+            if candidates and oi_missing == len(candidates) and vol_missing == len(candidates):
+                print(
+                    "[yellow]Note:[/yellow] OI/volume are missing from option chain snapshots, so liquidity gating can't be enforced.\n"
+                    "Falling back to `--no-require-liquidity` (spread+greeks only)."
+                )
+                opts = _scan(False)
+
+        if not opts:
+            print(
+                "[yellow]No contracts matched[/yellow] the filters.\n"
+                "Try widening DTE, increasing --max-premium, or loosening --max-spread-pct."
+            )
+            raise typer.Exit(code=0)
+
+        best = pick_best_delta_theta(
+            opts,
+            target_abs_delta=float(target_abs_delta),
+            delta_weight=float(delta_weight),
+            theta_weight=float(theta_weight),
+        )
+        if best is None:
+            print("[yellow]No contract could be selected[/yellow].")
+            raise typer.Exit(code=0)
+
+        # Underlying live-ish price (best-effort)
+        und_px = None
+        try:
+            last_px, _asof_map, _src = fetch_stock_last_prices(settings=settings, symbols=[ticker.upper()], max_symbols_for_live=5)
+            und_px = last_px.get(ticker.upper())
+        except Exception:
+            und_px = None
+
+        move5 = required_underlying_move_for_profit_pct(
+            opt_entry_price=float(best.price),
+            delta=float(best.delta) if best.delta is not None else None,
+            profit_pct=0.05,
+            underlying_px=und_px,
+            opt_type=str(best.opt_type),
+        )
+        qty = 1
+        try:
+            if float(best.premium_usd) > 0:
+                qty = max(1, int(float(max_premium_usd) // float(best.premium_usd)))
+        except Exception:
+            qty = 1
+
+        tbl = Table(title=f"Pick: {ticker.upper()} {w.upper()} under ${float(max_premium_usd):.0f} (optimize Δ+Θ)")
+        tbl.add_column("Underlying", style="bold")
+        tbl.add_column("Und px", justify="right")
+        tbl.add_column("Contract", style="bold")
+        tbl.add_column("Exp")
+        tbl.add_column("DTE", justify="right")
+        tbl.add_column("Strike", justify="right")
+        tbl.add_column("Price", justify="right")
+        tbl.add_column("Premium", justify="right")
+        tbl.add_column("Δ", justify="right")
+        tbl.add_column("Θ", justify="right")
+        tbl.add_column("Spread%", justify="right")
+        tbl.add_column("Move@+5%", justify="right")
+        tbl.add_column("Qty<=Budget", justify="right")
+
+        sp = (100.0 * float(best.spread_pct)) if isinstance(best.spread_pct, float) else None
+        tbl.add_row(
+            best.ticker,
+            ("—" if und_px is None else f"${und_px:.2f}"),
+            best.symbol,
+            best.expiry.isoformat(),
+            str(int(best.dte_days)),
+            f"{float(best.strike):.2f}",
+            f"{float(best.price):.2f}",
+            f"${float(best.premium_usd):,.0f}",
+            (f"{float(best.delta):.2f}" if best.delta is not None else "n/a"),
+            (f"{float(best.theta):.3f}" if best.theta is not None else "n/a"),
+            (f"{sp:.1f}%" if sp is not None else "n/a"),
+            format_required_move(move5),
+            str(int(qty)),
+        )
+        Console().print(tbl)
+
+        label = "LIVE" if live_ok else "PAPER"
+        if typer.confirm(f"Execute: BUY {int(qty)}x {best.symbol} (limit≈{float(best.price):.2f})? [{label}]", default=False):
+            if not execute:
+                print("[dim]DRY RUN[/dim]: re-run with `--execute` to submit this order.")
+                raise typer.Exit(code=0)
+            from ai_options_trader.execution.alpaca import submit_option_order
+
+            try:
+                resp = submit_option_order(
+                    trading=trading,
+                    symbol=str(best.symbol),
+                    qty=int(qty),
+                    side="buy",
+                    limit_price=float(best.price),
+                    tif="day",
+                )
+                print(f"[green]Submitted {label} order[/green]: {resp}")
+            except Exception as e:
+                print(f"[red]Order submission failed[/red]: {type(e).__name__}: {e}")
+                raise typer.Exit(code=2)
+
     @options_app.command("sp500-under-budget")
     def sp500_under_budget(
         max_premium_usd: float = typer.Option(100.0, "--max-premium", help="Max option premium per contract (USD)"),
@@ -276,6 +508,7 @@ def register(options_app: typer.Typer) -> None:
                 want=want,  # type: ignore[arg-type]
                 price_basis=pb,  # type: ignore[arg-type]
                 min_price=float(min_price),
+                max_spread_pct=float(max_spread_pct),
                 require_delta=True,
                 today=date.today(),
             )
@@ -396,6 +629,7 @@ def register(options_app: typer.Typer) -> None:
                 want=want,  # type: ignore[arg-type]
                 price_basis=pb,  # type: ignore[arg-type]
                 min_price=float(min_price),
+                max_spread_pct=float(max_spread_pct),
                 require_delta=True,
                 today=date.today(),
             )
@@ -461,6 +695,21 @@ def register(options_app: typer.Typer) -> None:
         basket: str = typer.Option("starter", "--basket", help="starter|extended (universe)"),
         ticker: str = typer.Option("", "--ticker", "-t", help="Optional: restrict to a single underlying ticker (e.g. SLV)"),
         tickers: str = typer.Option("", "--tickers", help="Optional: restrict to a comma-separated list of tickers (overrides --basket)"),
+        sleeves: str = typer.Option(
+            "",
+            "--sleeves",
+            help="Optional: restrict universe to one or more sleeves (comma/space-separated): macro, vol, ai-bubble.",
+        ),
+        catalyst_mode: bool = typer.Option(
+            False,
+            "--catalyst-mode",
+            help="Single-ticker mode: use earnings/news dossier, select expiry around next earnings when available, and ignore account cash for sizing (qty=1).",
+        ),
+        require_sp500: bool = typer.Option(
+            False,
+            "--require-sp500/--no-require-sp500",
+            help="If set, refuse tickers not in the current S&P 500 list (FMP-backed).",
+        ),
         start_date: str = typer.Option("2012-01-01", "--start-date", help="History start date (YYYY-MM-DD)"),
         horizon_days: int = typer.Option(63, "--horizon-days", help="Forward return horizon for 'extreme move' search"),
         k_analogs: int = typer.Option(250, "--k-analogs", help="How many closest regime analog days to use"),
@@ -504,6 +753,25 @@ def register(options_app: typer.Typer) -> None:
         settings = load_settings()
         trading, data = make_clients(settings)
 
+        # If a user provided a single ticker and didn't specify mode, default to catalyst-mode
+        # (this is the new behavior the user asked for).
+        if ticker.strip() and (not tickers.strip()) and (not bool(catalyst_mode)):
+            catalyst_mode = True
+
+        # Optional S&P 500 guardrail
+        if bool(require_sp500):
+            uni = load_sp500_universe(refresh=False, fmp_api_key=settings.fmp_api_key)
+            allow = set(t.strip().upper() for t in uni.tickers)
+            check = []
+            if tickers.strip():
+                check = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+            elif ticker.strip():
+                check = [ticker.strip().upper()]
+            for t in check:
+                if t not in allow:
+                    Console().print(Panel(f"[red]{t}[/red] is not in the current S&P 500 universe (source={uni.source}).", title="Universe", expand=False))
+                    raise typer.Exit(code=2)
+
         live_ok = bool(live) and (not bool(settings.alpaca_paper))
         if execute and (not settings.alpaca_paper) and (not live_ok):
             Console().print(
@@ -530,23 +798,26 @@ def register(options_app: typer.Typer) -> None:
             if not typer.confirm("Second confirmation: proceed with LIVE trading now?", default=False):
                 raise typer.Exit(code=0)
 
-        # Budget: default to live cash unless overridden.
-        cash_live = None
-        if float(cash_usd) > 0:
-            cash_live = float(cash_usd)
-        else:
-            try:
-                acct = trading.get_account()
-                cash_live = float(getattr(acct, "cash", 0.0) or 0.0)
-            except Exception:
-                cash_live = 0.0
+        # Budget: in catalyst mode, the recommendation must NOT depend on account cash.
+        cash_live = 0.0
+        prem_cap = float(max_premium_usd) if float(max_premium_usd) > 0 else 0.0
+        if not bool(catalyst_mode):
+            cash_live = None
+            if float(cash_usd) > 0:
+                cash_live = float(cash_usd)
+            else:
+                try:
+                    acct = trading.get_account()
+                    cash_live = float(getattr(acct, "cash", 0.0) or 0.0)
+                except Exception:
+                    cash_live = 0.0
 
-        # Reasonable default cap: all-in when tiny; otherwise limit per-contract to avoid accidental full spend.
-        if float(max_premium_usd) > 0:
-            prem_cap = float(max_premium_usd)
-        else:
-            prem_cap = float(cash_live) if float(cash_live) <= float(all_in_threshold_usd) else float(min(100.0, 0.35 * float(cash_live)))
-        prem_cap = float(max(0.0, prem_cap))
+            # Reasonable default cap: all-in when tiny; otherwise limit per-contract to avoid accidental full spend.
+            if float(max_premium_usd) > 0:
+                prem_cap = float(max_premium_usd)
+            else:
+                prem_cap = float(cash_live) if float(cash_live) <= float(all_in_threshold_usd) else float(min(100.0, 0.35 * float(cash_live)))
+            prem_cap = float(max(0.0, prem_cap))
 
         # Universe
         try:
@@ -561,7 +832,16 @@ def register(options_app: typer.Typer) -> None:
                 return STARTER_UNIVERSE
 
         symbols: list[str]
-        if tickers.strip():
+        # Sleeve universe override (if provided). This supersedes --basket for the affected sleeves.
+        sleeve_names = [x.strip() for x in str(sleeves or "").replace(",", " ").split() if x.strip()]
+        if sleeve_names:
+            cfgs = resolve_sleeves(sleeve_names)
+            all_syms: list[str] = []
+            for s in cfgs:
+                uni = s.universe_fn(basket) if s.universe_fn else []
+                all_syms.extend([t.strip().upper() for t in (uni or []) if t and t.strip()])
+            symbols = sorted(set(all_syms))
+        elif tickers.strip():
             symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()]
         elif ticker.strip():
             symbols = [ticker.strip().upper()]
@@ -678,7 +958,8 @@ def register(options_app: typer.Typer) -> None:
                 pass
 
         # Print top candidates
-        tbl = Table(title=f"Moonshot scan (asof={asof.date()} | horizon={horizon_days}d | analogs={k_analogs} | cash≈${cash_live:,.2f})")
+        cash_lbl = f"cash≈${cash_live:,.2f}" if (not bool(catalyst_mode) and isinstance(cash_live, (int, float))) else "cash=ignored"
+        tbl = Table(title=f"Moonshot scan (asof={asof.date()} | horizon={horizon_days}d | analogs={k_analogs} | {cash_lbl})")
         tbl.add_column("Rank", justify="right")
         tbl.add_column("Ticker", style="bold")
         tbl.add_column("Dir")
@@ -721,8 +1002,86 @@ def register(options_app: typer.Typer) -> None:
             )
         Console().print(tbl)
 
+        def _next_earnings_date_for_ticker(tkr: str) -> date | None:
+            try:
+                d = build_ticker_dossier(settings=settings, ticker=str(tkr), days_ahead=180)
+                ne = d.get("next_earnings") if isinstance(d, dict) else None
+                if isinstance(ne, dict) and ne.get("date"):
+                    return pd.to_datetime(ne.get("date")).date()
+            except Exception:
+                return None
+            return None
+
+        def _pick_contract(
+            *,
+            tkr: str,
+            want: str,
+            target_date: date | None,
+        ):
+            """
+            Pick a single long option contract.
+            - In catalyst mode, prefer expiries that cover the next earnings date when available.
+            - Never use account cash for filtering; qty is handled elsewhere.
+            """
+            chain = fetch_option_chain(data, tkr, feed=settings.alpaca_options_feed)
+            candidates = list(to_candidates(chain, tkr))
+
+            # We reuse the "affordable" selector as a general filter by setting a very large premium cap.
+            # This keeps all the delta/spread parsing logic in one place.
+            cap = 1e12
+
+            # If we have a target catalyst date, try to select expiries that cover it.
+            if target_date is not None:
+                today = pd.Timestamp(asof).date()
+                # Prefer expiry *after* the catalyst date (earnings) and within ~45 days after.
+                # If this fails, we fall back to the usual DTE window.
+                for (mind, maxd) in (
+                    (0, 120),
+                    (0, 180),
+                ):
+                    opts = affordable_options_for_ticker(
+                        candidates,
+                        ticker=tkr,
+                        max_premium_usd=float(cap),
+                        min_dte_days=int(mind),
+                        max_dte_days=int(maxd),
+                        want=want,  # type: ignore[arg-type]
+                        price_basis=pb,  # type: ignore[arg-type]
+                        min_price=float(min_price),
+                        max_spread_pct=float(max_spread_pct),
+                        require_delta=True,
+                        today=today,
+                    )
+                    # Keep only expiries that are >= target date.
+                    opts2 = [o for o in opts if o.expiry >= target_date]
+                    best = pick_best_affordable(opts2, target_abs_delta=float(target_abs_delta), max_spread_pct=float(max_spread_pct))
+                    if best is not None:
+                        return best
+
+            # Fallback: regular DTE window
+            opts = affordable_options_for_ticker(
+                candidates,
+                ticker=tkr,
+                max_premium_usd=float(cap),
+                min_dte_days=int(min_days),
+                max_dte_days=int(max_days),
+                want=want,  # type: ignore[arg-type]
+                price_basis=pb,  # type: ignore[arg-type]
+                min_price=float(min_price),
+                max_spread_pct=float(max_spread_pct),
+                require_delta=True,
+                today=pd.Timestamp(asof).date(),
+            )
+            return pick_best_affordable(opts, target_abs_delta=float(target_abs_delta), max_spread_pct=float(max_spread_pct))
+
         def _scan_best_contract_for_candidate(r) -> tuple[object | None, float]:
             """Return (AffordableOption|None, premium_cap_used) for this ticker under current budget."""
+            if bool(catalyst_mode):
+                want = "call" if r.direction == "bullish" else "put"
+                target_dt = _next_earnings_date_for_ticker(str(r.ticker))
+                best = _pick_contract(tkr=str(r.ticker), want=want, target_date=target_dt)
+                return best, 0.0
+
             # Update premium cap against remaining cash.
             cap_now = float(prem_cap)
             if float(remaining_cash) > 0:
@@ -754,6 +1113,7 @@ def register(options_app: typer.Typer) -> None:
                     want=want,  # type: ignore[arg-type]
                     price_basis=pb,  # type: ignore[arg-type]
                     min_price=float(minpx),
+                    max_spread_pct=float(spmax),
                     require_delta=True,
                     today=pd.Timestamp(asof).date(),
                 )
@@ -780,7 +1140,10 @@ def register(options_app: typer.Typer) -> None:
         if review:
             label = "LIVE" if live_ok else "PAPER"
             n_review = min(int(review_limit), len(ranked))
-            Console().print(Panel(f"Reviewing {n_review} moonshot candidate(s). Remaining cash≈${remaining_cash:,.2f}.", title="Review", expand=False))
+            if bool(catalyst_mode):
+                Console().print(Panel(f"Reviewing {n_review} moonshot candidate(s). Cash is ignored in catalyst mode. qty=1.", title="Review", expand=False))
+            else:
+                Console().print(Panel(f"Reviewing {n_review} moonshot candidate(s). Remaining cash≈${remaining_cash:,.2f}.", title="Review", expand=False))
 
             for i, r in enumerate(ranked[:n_review], start=1):
                 if float(remaining_cash) <= 0 and float(cash_live or 0.0) > 0:
@@ -812,6 +1175,7 @@ def register(options_app: typer.Typer) -> None:
 
                 if with_theory:
                     try:
+                        dossier = build_ticker_dossier(settings=settings, ticker=str(r.ticker), days_ahead=180) if bool(catalyst_mode) else {}
                         theory = llm_moonshot_theory(
                             settings=settings,
                             asof=asof_str,
@@ -829,6 +1193,7 @@ def register(options_app: typer.Typer) -> None:
                                 "extreme_date": r.extreme_date,
                                 "extreme_return": r.extreme_return,
                             },
+                            dossier=dossier,
                             model=(theory_model.strip() or None),
                             temperature=float(theory_temperature),
                         )
@@ -839,23 +1204,45 @@ def register(options_app: typer.Typer) -> None:
                 # Contract preview
                 tbl2 = Table(title="Proposed contract")
                 tbl2.add_column("Underlying", style="bold")
+                tbl2.add_column("Und px", justify="right")
                 tbl2.add_column("Type", style="bold")
                 tbl2.add_column("Contract", style="bold")
                 tbl2.add_column("Exp")
                 tbl2.add_column("DTE", justify="right")
                 tbl2.add_column("Strike", justify="right")
                 tbl2.add_column("Price", justify="right")
+                tbl2.add_column("Move@+5%", justify="right")
                 tbl2.add_column("Premium", justify="right")
                 tbl2.add_column("|Δ|", justify="right")
                 tbl2.add_column("Analog extreme", justify="right")
+                und_px_now = None
+                try:
+                    # Best-effort: use live-ish price for small symbol sets; otherwise use latest close.
+                    if len(symbols) <= 5:
+                        last_px, _asof_map, _src = fetch_stock_last_prices(settings=settings, symbols=[str(best.ticker)])
+                        und_px_now = last_px.get(str(best.ticker).strip().upper())
+                    if und_px_now is None and str(best.ticker) in px.columns and not px[str(best.ticker)].dropna().empty:
+                        und_px_now = float(px[str(best.ticker)].dropna().iloc[-1])
+                except Exception:
+                    und_px_now = None
+
+                move = required_underlying_move_for_profit_pct(
+                    opt_entry_price=float(best.price),
+                    delta=float(best.delta) if best.delta is not None else None,
+                    profit_pct=0.05,
+                    underlying_px=und_px_now,
+                    opt_type=str(best.opt_type),
+                )
                 tbl2.add_row(
                     str(best.ticker),
+                    ("—" if und_px_now is None else f"${und_px_now:.2f}"),
                     "CALL" if best.opt_type == "call" else "PUT",
                     str(best.symbol),
                     best.expiry.isoformat(),
                     str(int(best.dte_days)),
                     f"{float(best.strike):.2f}",
                     f"{float(best.price):.2f}",
+                    format_required_move(move),
                     f"${float(best.premium_usd):,.0f}",
                     f"{abs(float(best.delta)):.2f}" if best.delta is not None else "n/a",
                     ex,
@@ -864,7 +1251,9 @@ def register(options_app: typer.Typer) -> None:
 
                 # Sizing: in all-in mode, buy as many as fit in remaining cash; otherwise 1.
                 qty = 1
-                if float(remaining_cash) > 0 and float(best.premium_usd) > 0:
+                if bool(catalyst_mode):
+                    qty = 1
+                elif float(remaining_cash) > 0 and float(best.premium_usd) > 0:
                     qty = max(1, int(float(remaining_cash) // float(best.premium_usd))) if all_in else 1
                 est_total = float(qty) * float(best.premium_usd)
 
@@ -874,9 +1263,10 @@ def register(options_app: typer.Typer) -> None:
                         break
                     continue
 
-                # Reserve budget immediately (even in dry-run) so the review behaves realistically.
-                remaining_cash = max(0.0, float(remaining_cash) - float(est_total))
-                Console().print(Panel(f"Reserved ≈${est_total:,.2f}. Remaining cash≈${remaining_cash:,.2f}.", title="Budget", expand=False))
+                if not bool(catalyst_mode):
+                    # Reserve budget immediately (even in dry-run) so the review behaves realistically.
+                    remaining_cash = max(0.0, float(remaining_cash) - float(est_total))
+                    Console().print(Panel(f"Reserved ≈${est_total:,.2f}. Remaining cash≈${remaining_cash:,.2f}.", title="Budget", expand=False))
 
                 if not execute:
                     print("[dim]DRY RUN[/dim]: re-run with `--execute` to submit orders.")
@@ -927,26 +1317,47 @@ def register(options_app: typer.Typer) -> None:
         assert r is not None
         tbl2 = Table(title="Moonshot recommendation (scanner)")
         tbl2.add_column("Underlying", style="bold")
+        tbl2.add_column("Und px", justify="right")
         tbl2.add_column("Type", style="bold")
         tbl2.add_column("Contract", style="bold")
         tbl2.add_column("Exp")
         tbl2.add_column("DTE", justify="right")
         tbl2.add_column("Strike", justify="right")
         tbl2.add_column("Price", justify="right")
+        tbl2.add_column("Move@+5%", justify="right")
         tbl2.add_column("Premium", justify="right")
         tbl2.add_column("|Δ|", justify="right")
         tbl2.add_column("Analog extreme", justify="right")
         ex = "—"
         if r.extreme_date is not None and r.extreme_return is not None:
             ex = f"{pd.to_datetime(r.extreme_date).date()} {100.0*float(r.extreme_return):+.1f}%"
+        und_px_now = None
+        try:
+            if len(symbols) <= 5:
+                last_px, _asof_map, _src = fetch_stock_last_prices(settings=settings, symbols=[str(recommended.ticker)])
+                und_px_now = last_px.get(str(recommended.ticker).strip().upper())
+            if und_px_now is None and str(recommended.ticker) in px.columns and not px[str(recommended.ticker)].dropna().empty:
+                und_px_now = float(px[str(recommended.ticker)].dropna().iloc[-1])
+        except Exception:
+            und_px_now = None
+
+        move = required_underlying_move_for_profit_pct(
+            opt_entry_price=float(recommended.price),
+            delta=float(recommended.delta) if recommended.delta is not None else None,
+            profit_pct=0.05,
+            underlying_px=und_px_now,
+            opt_type=str(recommended.opt_type),
+        )
         tbl2.add_row(
             str(recommended.ticker),
+            ("—" if und_px_now is None else f"${und_px_now:.2f}"),
             "CALL" if recommended.opt_type == "call" else "PUT",
             str(recommended.symbol),
             recommended.expiry.isoformat(),
             str(int(recommended.dte_days)),
             f"{float(recommended.strike):.2f}",
             f"{float(recommended.price):.2f}",
+            format_required_move(move),
             f"${float(recommended.premium_usd):,.0f}",
             f"{abs(float(recommended.delta)):.2f}" if recommended.delta is not None else "n/a",
             ex,

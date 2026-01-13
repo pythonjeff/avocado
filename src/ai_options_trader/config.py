@@ -75,9 +75,12 @@ class StrategyConfig(BaseModel):
     dte_min: int = 14
     dte_max: int = 90
 
-    min_open_interest: int = 10
-    min_volume: int = 1
-    max_spread_pct: float = 0.99  # 15%
+    # Liquidity guardrails (defaults chosen to avoid "you can buy it but you can't sell it" contracts)
+    # - Spread is measured as (ask-bid)/mid. 0.30 means ~30% of mid.
+    # - A contract passes liquidity if (open_interest >= min_open_interest) OR (volume >= min_volume).
+    min_open_interest: int = 100
+    min_volume: int = 100
+    max_spread_pct: float = 0.30
 
 class RiskConfig(BaseModel):
     max_equity_pct_per_trade: float = 0.10

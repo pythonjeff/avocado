@@ -75,6 +75,72 @@ lox autopilot run-once --engine ml --basket extended --llm --llm-news --llm-gate
 
 ---
 
+## Recent structural upgrades (high signal)
+
+### Multi-sleeve architecture (pods)
+
+Lox now supports a **multi-sleeve** architecture (macro / vol / ai-bubble / housing) with:
+
+- One shared pipeline (data → regime matrix → scoring → aggregation → optional LLM overlay → optional execution)
+- Standardized trade records (`CandidateTrade`)
+- A `PortfolioAggregator` that de-dupes exposures and enforces factor caps
+
+Design note: `docs/ARCHITECTURE_SLEEVES.md`
+
+Example:
+
+```bash
+lox autopilot run-once --sleeves macro vol housing --engine analog --basket extended --llm --llm-news
+```
+
+### Predictions-only mode (no budgeting, no trade selection)
+
+If you want directional forecasts **without** budgeting, options selection, or execution prompts:
+
+```bash
+lox autopilot run-once --predictions --top-predictions 25 --sleeves macro vol
+```
+
+Predictions are scored as **excess returns vs SPY** to reduce “everything is UP” drift bias.
+
+### Housing / MBS regime (new)
+
+Includes a housing basket (MBB/VMBS/ITB/XHB/VNQ/… + hedges) and a simple regime classifier.
+
+```bash
+lox labs housing snapshot
+```
+
+### Options recommendation quality (liquidity + clarity)
+
+Across the program, options candidates are filtered for **liquidity**:
+
+- Minimum **open interest** or **volume**
+- Maximum **bid/ask spread %**
+
+And every recommended option displays:
+
+- **Underlying price**
+- **Required underlying move for +5% option profit**
+
+### Buy shares using all Alpaca cash (new)
+
+For shares/ETFs (e.g., SQQQ), you can buy with a **notional budget** derived from Alpaca cash (default = 100%):
+
+```bash
+lox account buy-shares --ticker SQQQ --pct-cash 1.0
+```
+
+To submit orders, re-run with `--execute` (paper by default; use `--live` only when `ALPACA_PAPER=false`).
+
+If you install updates and don’t see new commands, refresh your local entrypoint:
+
+```bash
+pip install -e .
+```
+
+---
+
 ## Moonshot scanner (high-variance, in-budget options)
 
 This is a research scanner designed to find **in-budget longshots** while focusing on **high realized-vol underlyings**:

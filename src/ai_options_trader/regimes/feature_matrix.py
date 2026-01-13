@@ -10,6 +10,7 @@ from ai_options_trader.macro.signals import build_macro_dataset
 from ai_options_trader.rates.signals import build_rates_dataset
 from ai_options_trader.usd.signals import build_usd_dataset
 from ai_options_trader.volatility.signals import build_volatility_dataset
+from ai_options_trader.housing.signals import build_housing_dataset
 
 
 def build_regime_feature_matrix(
@@ -32,6 +33,7 @@ def build_regime_feature_matrix(
     vol_df = build_volatility_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
     commod_df = build_commodities_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
     fiscal_df = build_fiscal_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
+    housing_df = build_housing_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
 
     f = pd.DataFrame({"date": pd.to_datetime(macro_df["date"])})
     f["macro_disconnect_score"] = macro_df.get("DISCONNECT_SCORE")
@@ -113,6 +115,20 @@ def build_regime_feature_matrix(
         fiscal_cols = ["date"]
     f = f.merge(fiscal_df[fiscal_cols].copy(), on="date", how="left")
 
+    # Housing / MBS (best-effort): mortgage spread stress + market proxies.
+    housing_cols = [
+        "date",
+        "Z_MORTGAGE_SPREAD",
+        "Z_MBS_REL_RET_60D",
+        "Z_HOMEBUILDER_REL_RET_60D",
+        "Z_REIT_REL_RET_60D",
+        "HOUSING_PRESSURE_SCORE",
+    ]
+    housing_cols = [c for c in housing_cols if c in housing_df.columns]
+    if "date" not in housing_cols:
+        housing_cols = ["date"]
+    f = f.merge(housing_df[housing_cols].copy(), on="date", how="left")
+
     f = f.sort_values("date").set_index("date")
     f = f.rename(
         columns={
@@ -148,6 +164,11 @@ def build_regime_feature_matrix(
             "Z_LONG_DURATION_ISS_SHARE": "fiscal_z_long_duration_iss_share",
             "Z_AUCTION_TAIL_BPS": "fiscal_z_auction_tail_bps",
             "Z_DEALER_TAKE_PCT": "fiscal_z_dealer_take_pct",
+            "Z_MORTGAGE_SPREAD": "housing_z_mortgage_spread",
+            "Z_MBS_REL_RET_60D": "housing_z_mbs_rel_ret_60d",
+            "Z_HOMEBUILDER_REL_RET_60D": "housing_z_homebuilder_rel_ret_60d",
+            "Z_REIT_REL_RET_60D": "housing_z_reit_rel_ret_60d",
+            "HOUSING_PRESSURE_SCORE": "housing_pressure_score",
         }
     )
     return f

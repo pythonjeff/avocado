@@ -28,6 +28,8 @@ Lox has three daily pillars: \b Account briefing\b0, \b Autopilot trades\b0, and
 \pard\li360
 \b lox options moonshot \par\b0 Finds in-budget longshot options ideas, with review/execute prompts.\par
 \b lox options moonshot --ticker SLV \par\b0 Single-name moonshot.\par
+\b lox options moonshot --ticker AAPL --catalyst-mode --theory \par\b0 Single-name catalyst mode: pulls an earnings/news dossier, picks expiry around next earnings when available, generates an LLM catalyst summary, and recommends \b qty=1\b0 (ignores account cash).\par
+\b lox options moonshot --ticker AAPL --catalyst-mode --require-sp500 \par\b0 Optional guardrail: refuse non-S\~\&P tickers.\par
 \pard\par
 \b 5) Fund accounting (investors + cashflows)\b0\par
 \pard\li360

@@ -46,6 +46,103 @@ class EarningsEvent:
     revenue_estimated: float | None = None
 
 
+def fetch_earnings_history(
+    *,
+    settings: Settings,
+    ticker: str,
+    limit: int = 12,
+    cache_max_age: timedelta = timedelta(hours=12),
+) -> list[dict[str, Any]]:
+    """
+    Fetch historical earnings rows for a ticker (best-effort).
+
+    FMP has used multiple endpoint spellings historically, so we try a few:
+    - /api/v3/earnings-surprises/{ticker}
+    - /api/v3/earnings_surprises/{ticker}
+    - /api/v3/historical/earning_calendar/{ticker}
+
+    Returns raw JSON rows (list[dict]) or [].
+    """
+    if not settings.fmp_api_key:
+        return []
+    t = (ticker or "").strip().upper()
+    if not t:
+        return []
+
+    key = f"fmp_earnings_history_{t}_limit{int(limit)}"
+    p = cache_path(key)
+    cached = read_cache(p, max_age=cache_max_age)
+    if isinstance(cached, list):
+        return cached
+
+    import requests
+
+    params = {"apikey": settings.fmp_api_key, "limit": int(limit)}
+    endpoints = (
+        f"{FMP_BASE_URL}/v3/earnings-surprises/{t}",
+        f"{FMP_BASE_URL}/v3/earnings_surprises/{t}",
+        f"{FMP_BASE_URL}/v3/historical/earning_calendar/{t}",
+    )
+    for url in endpoints:
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list):
+                rows = [r for r in data if isinstance(r, dict)]
+                if rows:
+                    write_cache(p, rows[: max(0, int(limit))])
+                    return rows[: max(0, int(limit))]
+        except Exception:
+            continue
+    return []
+
+
+def fetch_stock_news(
+    *,
+    settings: Settings,
+    ticker: str,
+    limit: int = 25,
+    cache_max_age: timedelta = timedelta(minutes=30),
+) -> list[dict[str, Any]]:
+    """
+    Fetch recent news headlines for a ticker (best-effort).
+
+    Endpoint (typical): /api/v3/stock_news?tickers=AAPL&limit=50
+    Returns raw JSON rows (list[dict]) or [].
+    """
+    if not settings.fmp_api_key:
+        return []
+    t = (ticker or "").strip().upper()
+    if not t:
+        return []
+
+    key = f"fmp_stock_news_{t}_limit{int(limit)}"
+    p = cache_path(key)
+    cached = read_cache(p, max_age=cache_max_age)
+    if isinstance(cached, list):
+        return cached
+
+    url = f"{FMP_BASE_URL}/v3/stock_news"
+    import requests
+
+    try:
+        resp = requests.get(
+            url,
+            params={"tickers": t, "limit": int(limit), "apikey": settings.fmp_api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            rows = [r for r in data if isinstance(r, dict)]
+            write_cache(p, rows[: max(0, int(limit))])
+            return rows[: max(0, int(limit))]
+    except Exception:
+        return []
+    return []
+
+
 def fetch_profile(
     *,
     settings: Settings,
@@ -212,5 +309,7 @@ def build_ticker_dossier(
         "asof": datetime.now(timezone.utc).date().isoformat(),
         "profile": (prof.__dict__ if prof else None),
         "next_earnings": (next_ev.__dict__ if next_ev else None),
+        "earnings_history": fetch_earnings_history(settings=settings, ticker=t, limit=12),
+        "news": fetch_stock_news(settings=settings, ticker=t, limit=25),
     }
 

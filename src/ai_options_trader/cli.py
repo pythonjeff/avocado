@@ -17,6 +17,8 @@ ideas_app = typer.Typer(add_completion=False, help="Idea generation (event + pla
 app.add_typer(ideas_app, name="ideas")
 model_app = typer.Typer(add_completion=False, help="Model research (macro panel ML: eval/A-B/dataset)")
 app.add_typer(model_app, name="model")
+live_app = typer.Typer(add_completion=False, help="Live console (interactive monitoring + manual crypto execution)")
+app.add_typer(live_app, name="live")
 
 # ---------------------------------------------------------------------------
 # Power-user tools tucked under `lox labs ...` so `lox --help` stays clean
@@ -48,6 +50,8 @@ crypto_app = typer.Typer(add_completion=False, help="Crypto snapshots and LLM ou
 labs_app.add_typer(crypto_app, name="crypto")
 ticker_app = typer.Typer(add_completion=False, help="Ticker snapshots and LLM outlooks")
 labs_app.add_typer(ticker_app, name="ticker")
+housing_app = typer.Typer(add_completion=False, help="Housing / MBS regime (mortgage spreads + housing proxies)")
+labs_app.add_typer(housing_app, name="housing")
 track_app = typer.Typer(add_completion=False, help="Track recommendations, executions, and performance")
 labs_app.add_typer(track_app, name="track")
 
@@ -72,9 +76,11 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.commodities_cmd import register as register_commodities
     from ai_options_trader.cli_commands.crypto_cmd import register as register_crypto
     from ai_options_trader.cli_commands.ticker_cmd import register as register_ticker
+    from ai_options_trader.cli_commands.housing_cmd import register as register_housing
     from ai_options_trader.cli_commands.regimes_cmd import register as register_regimes
     from ai_options_trader.cli_commands.ideas_cmd import register as register_ideas
     from ai_options_trader.cli_commands.macro_model_cmd import register as register_macro_model
+    from ai_options_trader.cli_commands.live_cmd import register as register_live
     from ai_options_trader.cli_commands.track_cmd import register as register_track
     from ai_options_trader.cli_commands.nav_cmd import register as register_nav
     from ai_options_trader.cli_commands.autopilot_cmd import register as register_autopilot
@@ -92,6 +98,7 @@ def _register_commands() -> None:
     register_nav(nav_app)
     register_autopilot(autopilot_app)
     register_account(app)
+    register_live(live_app)
 
     # Labs: keep everything else accessible under `lox labs ...`
     register_select(labs_app)
@@ -109,6 +116,7 @@ def _register_commands() -> None:
     register_commodities(commod_app)
     register_crypto(crypto_app)
     register_ticker(ticker_app)
+    register_housing(housing_app)
     _COMMANDS_REGISTERED = True
 
 

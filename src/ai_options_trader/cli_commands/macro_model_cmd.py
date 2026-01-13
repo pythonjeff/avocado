@@ -135,6 +135,7 @@ def register(ideas_app: typer.Typer) -> None:
                         want=want,  # type: ignore[arg-type]
                         price_basis="ask",  # type: ignore[arg-type]
                         min_price=0.05,
+                        max_spread_pct=float(max_spread_pct),
                         require_delta=True,
                     )
                     best = pick_best_affordable(opts, target_abs_delta=float(target_abs_delta), max_spread_pct=float(max_spread_pct))
