@@ -51,6 +51,49 @@ def test_investor_unitization_basic(tmp_path: Path):
     assert abs(total_value - 210.0) < 1e-6
 
 
+def test_investor_flow_between_nav_snapshots_does_not_distort_existing_investors(tmp_path: Path):
+    """
+    If an investor contributes between NAV snapshots, units should be issued at the latest known nav_per_unit,
+    and the next NAV snapshot should incorporate the cash so existing investors are not diluted.
+    """
+    sheet = str(tmp_path / "nav_sheet.csv")
+    inv_flows = str(tmp_path / "nav_investor_flows.csv")
+
+    # Seed JL with $100 and take first NAV snapshot.
+    append_investor_flow(ts="2026-01-01T00:00:00+00:00", code="JL", amount=100.0, note="seed", path=inv_flows)
+    append_nav_snapshot(
+        ts="2026-01-01T12:00:00+00:00",
+        equity=100.0,
+        cash=100.0,
+        buying_power=100.0,
+        positions_count=0,
+        note="start",
+        sheet_path=sheet,
+        flows_path=str(tmp_path / "unused.csv"),
+    )
+
+    # TG contributes $100 after the snapshot.
+    append_investor_flow(ts="2026-01-01T12:00:01+00:00", code="TG", amount=100.0, note="add", path=inv_flows)
+
+    # Next NAV snapshot includes the cash (equity increases by $100; no PnL).
+    append_nav_snapshot(
+        ts="2026-01-01T18:00:00+00:00",
+        equity=200.0,
+        cash=200.0,
+        buying_power=200.0,
+        positions_count=0,
+        note="after deposit",
+        sheet_path=sheet,
+        flows_path=str(tmp_path / "unused.csv"),
+    )
+
+    rep = investor_report(nav_sheet_path=sheet, investor_flows_path=inv_flows)
+    rows = {r["code"]: r for r in rep["rows"]}
+    # Both should have basis==value and ~0 pnl immediately after the deposit-driven snapshot.
+    assert abs(rows["JL"]["pnl"]) < 1e-6
+    assert abs(rows["TG"]["pnl"]) < 1e-6
+
+
 def test_investor_import_xlsx_excel_serial_dates(tmp_path: Path):
     # Build a minimal .xlsx (zip) that our stdlib reader can parse.
     xlsx = tmp_path / "investors.xlsx"

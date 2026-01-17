@@ -73,6 +73,14 @@ If you want the LLM to act as a gate (must say `DECISION: GO` before execution i
 lox autopilot run-once --engine ml --basket extended --llm --llm-news --llm-gate --execute
 ```
 
+### 3) Weekly report (NAV + trades + macro snapshot)
+
+```bash
+lox weekly report
+```
+
+Outputs a concise weekly summary with NAV snapshot, current trades, thesis, leading indicators, and macro weekly performance.
+
 ---
 
 ## Recent structural upgrades (high signal)
@@ -192,3 +200,4 @@ pytest -q
 ## Project constitution
 - `docs/PROJECT_CONSTITUTION.md`
 - `docs/OBJECTIVES.md`
+

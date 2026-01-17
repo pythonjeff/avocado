@@ -7,6 +7,7 @@ import pandas as pd
 from ai_options_trader.config import Settings
 from ai_options_trader.data.fred import FredClient
 from ai_options_trader.funding.models import FundingInputs, FundingState
+from ai_options_trader.funding.nyfed import fetch_nyfed_secured_rate
 from ai_options_trader.macro.transforms import merge_series_daily
 
 
@@ -60,10 +61,26 @@ def build_funding_dataset(settings: Settings, start_date: str = "2011-01-01", re
         if name in _OPTIONAL_SERIES:
             df = _fetch_optional(fred=fred, series_id=sid, start_date=start_date, refresh=refresh)
             if df is None or df.empty:
+                # Fallback: TGCR/BGCR are published by NY Fed; use their public API when FRED is flaky/missing.
+                if name in {"TGCR", "BGCR"}:
+                    try:
+                        r = fetch_nyfed_secured_rate(
+                            rate=("tgcr" if name == "TGCR" else "bgcr"),
+                            start_date=start_date,
+                            refresh=bool(refresh),
+                        )
+                        if r.df is not None and not r.df.empty:
+                            df2 = r.df.rename(columns={"value": name}).copy()
+                            df2 = df2[["date", name]]
+                            frames[name] = df2.sort_values("date").reset_index(drop=True)
+                            continue
+                    except Exception:
+                        pass
                 continue
         else:
             df = fred.fetch_series(series_id=sid, start_date=start_date, refresh=refresh)
-        frames[name] = df.sort_values("date").reset_index(drop=True)
+        if df is not None and not df.empty:
+            frames[name] = df.sort_values("date").reset_index(drop=True)
 
     # IORB (optional) with fallbacks
     iorb_df = None

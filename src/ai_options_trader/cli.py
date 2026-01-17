@@ -19,6 +19,8 @@ model_app = typer.Typer(add_completion=False, help="Model research (macro panel 
 app.add_typer(model_app, name="model")
 live_app = typer.Typer(add_completion=False, help="Live console (interactive monitoring + manual crypto execution)")
 app.add_typer(live_app, name="live")
+weekly_app = typer.Typer(add_completion=False, help="Weekly report")
+app.add_typer(weekly_app, name="weekly")
 
 # ---------------------------------------------------------------------------
 # Power-user tools tucked under `lox labs ...` so `lox --help` stays clean
@@ -52,6 +54,8 @@ ticker_app = typer.Typer(add_completion=False, help="Ticker snapshots and LLM ou
 labs_app.add_typer(ticker_app, name="ticker")
 housing_app = typer.Typer(add_completion=False, help="Housing / MBS regime (mortgage spreads + housing proxies)")
 labs_app.add_typer(housing_app, name="housing")
+solar_app = typer.Typer(add_completion=False, help="Solar / silver regime (solar basket vs SLV)")
+labs_app.add_typer(solar_app, name="solar")
 track_app = typer.Typer(add_completion=False, help="Track recommendations, executions, and performance")
 labs_app.add_typer(track_app, name="track")
 
@@ -77,6 +81,7 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.crypto_cmd import register as register_crypto
     from ai_options_trader.cli_commands.ticker_cmd import register as register_ticker
     from ai_options_trader.cli_commands.housing_cmd import register as register_housing
+    from ai_options_trader.cli_commands.solar_cmd import register as register_solar
     from ai_options_trader.cli_commands.regimes_cmd import register as register_regimes
     from ai_options_trader.cli_commands.ideas_cmd import register as register_ideas
     from ai_options_trader.cli_commands.macro_model_cmd import register as register_macro_model
@@ -86,6 +91,7 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.autopilot_cmd import register as register_autopilot
     from ai_options_trader.cli_commands.portfolio_cmd import register as register_portfolio
     from ai_options_trader.cli_commands.account_cmd import register as register_account
+    from ai_options_trader.cli_commands.weekly_report_cmd import register as register_weekly_report
 
     # Clean surface
     register_options(options_app)
@@ -99,6 +105,7 @@ def _register_commands() -> None:
     register_autopilot(autopilot_app)
     register_account(app)
     register_live(live_app)
+    register_weekly_report(weekly_app)
 
     # Labs: keep everything else accessible under `lox labs ...`
     register_select(labs_app)
@@ -117,6 +124,7 @@ def _register_commands() -> None:
     register_crypto(crypto_app)
     register_ticker(ticker_app)
     register_housing(housing_app)
+    register_solar(solar_app)
     _COMMANDS_REGISTERED = True
 
 

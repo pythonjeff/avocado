@@ -18,12 +18,19 @@ def register(liquidity_app: typer.Typer) -> None:
 
         This command remains as a backwards-compatible alias.
         """
-        from ai_options_trader.cli_commands.funding_cmd import register as register_funding
+        from ai_options_trader.cli_commands.funding_cmd import run_funding_snapshot
 
-        # Mount funding snapshot under the legacy `liquidity` command group.
-        tmp = typer.Typer(add_completion=False)
-        register_funding(tmp)
-        # Call the funding snapshot command directly.
-        tmp.commands["snapshot"](start=start, refresh=refresh, features=features)  # type: ignore[misc]
+        run_funding_snapshot(start=start, refresh=bool(refresh), features=bool(features))
+
+    @liquidity_app.command("outlook")
+    def liquidity_outlook(
+        start: str = typer.Option("2011-01-01", "--start", help="Start date YYYY-MM-DD"),
+        refresh: bool = typer.Option(False, "--refresh", help="Force refresh FRED downloads"),
+        features: bool = typer.Option(False, "--features", help="Print ML-friendly scalar feature vector too"),
+    ):
+        """Alias for `snapshot` (back-compat UX)."""
+        from ai_options_trader.cli_commands.funding_cmd import run_funding_snapshot
+
+        run_funding_snapshot(start=start, refresh=bool(refresh), features=bool(features))
 
 

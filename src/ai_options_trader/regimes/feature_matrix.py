@@ -11,6 +11,7 @@ from ai_options_trader.rates.signals import build_rates_dataset
 from ai_options_trader.usd.signals import build_usd_dataset
 from ai_options_trader.volatility.signals import build_volatility_dataset
 from ai_options_trader.housing.signals import build_housing_dataset
+from ai_options_trader.solar.signals import build_solar_dataset
 
 
 def build_regime_feature_matrix(
@@ -34,6 +35,7 @@ def build_regime_feature_matrix(
     commod_df = build_commodities_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
     fiscal_df = build_fiscal_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
     housing_df = build_housing_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
+    solar_df = build_solar_dataset(settings=settings, start_date=start_date, refresh=refresh_fred)
 
     f = pd.DataFrame({"date": pd.to_datetime(macro_df["date"])})
     f["macro_disconnect_score"] = macro_df.get("DISCONNECT_SCORE")
@@ -129,6 +131,18 @@ def build_regime_feature_matrix(
         housing_cols = ["date"]
     f = f.merge(housing_df[housing_cols].copy(), on="date", how="left")
 
+    # Solar / Silver (best-effort): solar basket vs SPY + silver momentum.
+    solar_cols = [
+        "date",
+        "Z_SOLAR_REL_RET_60D",
+        "Z_SILVER_RET_60D",
+        "SOLAR_HEADWIND_SCORE",
+    ]
+    solar_cols = [c for c in solar_cols if c in solar_df.columns]
+    if "date" not in solar_cols:
+        solar_cols = ["date"]
+    f = f.merge(solar_df[solar_cols].copy(), on="date", how="left")
+
     f = f.sort_values("date").set_index("date")
     f = f.rename(
         columns={
@@ -169,6 +183,9 @@ def build_regime_feature_matrix(
             "Z_HOMEBUILDER_REL_RET_60D": "housing_z_homebuilder_rel_ret_60d",
             "Z_REIT_REL_RET_60D": "housing_z_reit_rel_ret_60d",
             "HOUSING_PRESSURE_SCORE": "housing_pressure_score",
+            "Z_SOLAR_REL_RET_60D": "solar_z_rel_ret_60d",
+            "Z_SILVER_RET_60D": "solar_z_silver_ret_60d",
+            "SOLAR_HEADWIND_SCORE": "solar_headwind_score",
         }
     )
     return f

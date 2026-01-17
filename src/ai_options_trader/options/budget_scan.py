@@ -197,4 +197,3 @@ def pick_best_delta_theta(
         return (score, float(o.premium_usd))
 
     return sorted(opts, key=_key)[0]
-

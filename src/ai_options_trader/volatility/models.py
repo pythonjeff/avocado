@@ -17,6 +17,10 @@ class VolatilityInputs(BaseModel):
 
     # Term structure (spot - 3m); positive implies backwardation-ish / stress
     vix_term_spread: Optional[float] = None
+    # Source for the 3m anchor used in term structure:
+    # - "fred:VIX3M" when available
+    # - "fmp:VXV" as a best-effort proxy (3-month VIX index level) when FRED lacks VIX3M
+    vix_term_source: Optional[str] = None
 
     # Context (z-scores vs recent history)
     z_vix: Optional[float] = None

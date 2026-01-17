@@ -258,6 +258,11 @@ def register(options_app: typer.Typer) -> None:
         price_basis: str = typer.Option("ask", "--price-basis", help="ask|mid|last (premium basis)"),
         min_price: float = typer.Option(0.05, "--min-price", help="Minimum option price"),
         max_spread_pct: float = typer.Option(0.30, "--max-spread-pct", help="Require spread <= this (fraction of mid)"),
+        require_delta: bool = typer.Option(
+            True,
+            "--require-delta/--no-require-delta",
+            help="Require delta to be present in the option snapshot (recommended). Disable if your data source omits greeks.",
+        ),
         require_liquidity: bool = typer.Option(
             True,
             "--require-liquidity/--no-require-liquidity",
@@ -330,6 +335,84 @@ def register(options_app: typer.Typer) -> None:
             print(f"[yellow]No option candidates returned[/yellow] for {ticker}. Check your data entitlements/feed.")
             raise typer.Exit(code=0)
 
+        def _diagnose(require_liq: bool, require_d: bool) -> dict[str, int]:
+            """
+            Lightweight filter diagnostics to explain why no contracts match.
+            Mirrors affordable_options_for_ticker() logic at a high level.
+            """
+            from ai_options_trader.utils.occ import parse_occ_option_symbol
+            from datetime import date as _date
+
+            today = _date.today()
+            diag = {
+                "total": 0,
+                "bad_symbol": 0,
+                "want": 0,
+                "dte": 0,
+                "no_price": 0,
+                "min_price": 0,
+                "budget": 0,
+                "no_delta": 0,
+                "no_spread": 0,
+                "spread": 0,
+                "liquidity": 0,
+                "pass": 0,
+            }
+            for c in candidates:
+                diag["total"] += 1
+                try:
+                    expiry, opt_type, _strike = parse_occ_option_symbol(c.symbol, ticker)
+                except Exception:
+                    diag["bad_symbol"] += 1
+                    continue
+                if w != "both" and opt_type != w:
+                    diag["want"] += 1
+                    continue
+                dte = (expiry - today).days
+                if dte < int(min_days) or dte > int(max_days):
+                    diag["dte"] += 1
+                    continue
+                mid = c.mid
+                ask = c.ask
+                last = c.last
+                if pb == "mid":
+                    px = mid
+                elif pb == "last":
+                    px = last
+                else:
+                    px = ask
+                if px is None or float(px) <= 0:
+                    diag["no_price"] += 1
+                    continue
+                if float(px) < float(min_price):
+                    diag["min_price"] += 1
+                    continue
+                prem = float(px) * 100.0
+                if prem > float(max_premium_usd):
+                    diag["budget"] += 1
+                    continue
+                if bool(require_d) and c.delta is None:
+                    diag["no_delta"] += 1
+                    continue
+                # Spread must be computable and <= max_spread
+                if c.bid is None or c.ask is None or mid is None or float(mid) <= 0:
+                    diag["no_spread"] += 1
+                    continue
+                sp = float((float(c.ask) - float(c.bid)) / float(mid))
+                if sp > float(max_spread_pct):
+                    diag["spread"] += 1
+                    continue
+                if bool(require_liq):
+                    oi_val = int(c.oi) if c.oi is not None else None
+                    vol_val = int(c.volume) if c.volume is not None else None
+                    oi_ok = (oi_val is not None) and (oi_val >= 100)
+                    vol_ok = (vol_val is not None) and (vol_val >= 100)
+                    if not (oi_ok or vol_ok):
+                        diag["liquidity"] += 1
+                        continue
+                diag["pass"] += 1
+            return diag
+
         def _scan(require_liq: bool):
             return affordable_options_for_ticker(
                 candidates,
@@ -341,7 +424,7 @@ def register(options_app: typer.Typer) -> None:
                 price_basis=pb,  # type: ignore[arg-type]
                 min_price=float(min_price),
                 max_spread_pct=float(max_spread_pct),
-                require_delta=True,
+                require_delta=bool(require_delta),
                 require_liquidity=bool(require_liq),
                 today=date.today(),
             )
@@ -358,7 +441,44 @@ def register(options_app: typer.Typer) -> None:
                 )
                 opts = _scan(False)
 
+        # If greeks are missing (esp delta), optionally fall back.
+        if (not opts) and bool(require_delta):
+            delta_missing = sum(1 for c in candidates if c.delta is None)
+            if candidates and delta_missing == len(candidates):
+                print(
+                    "[yellow]Note:[/yellow] Delta is missing from option snapshots, so delta-based selection can't be enforced.\n"
+                    "Falling back to `--no-require-delta` (spread+price only)."
+                )
+                require_delta = False
+                opts = _scan(bool(require_liquidity))
+
         if not opts:
+            # Print diagnostics so the user can see which constraint is binding.
+            try:
+                from rich.panel import Panel as _Panel
+                from rich.console import Console as _Console
+
+                d1 = _diagnose(bool(require_liquidity), bool(require_delta))
+                msg = (
+                    f"total={d1['total']}\n"
+                    f"bad_symbol={d1['bad_symbol']} want={d1['want']} dte={d1['dte']}\n"
+                    f"no_price={d1['no_price']} min_price={d1['min_price']} budget={d1['budget']}\n"
+                    f"no_delta={d1['no_delta']} no_spread={d1['no_spread']} spread={d1['spread']} liquidity={d1['liquidity']}\n"
+                    f"pass={d1['pass']}"
+                )
+                _Console().print(_Panel(msg, title="Pick diagnostics (why nothing matched)", expand=False))
+            except Exception:
+                pass
+
+            # Practical hint: if budget is tiny for SPY/QQQ, a single long option may be unrealistic.
+            try:
+                if float(max_premium_usd) < 200 and ticker.strip().upper() in {"SPY", "QQQ", "IWM"}:
+                    print(
+                        "[dim]Hint: with a per-contract budget under ~$200, liquid long-dated SPY/QQQ/IWM options are often out of reach.\n"
+                        "Consider: (1) inverse ETF shares (SH/SDS/SPXU), (2) shorter DTE, or (3) a put spread (not yet auto-built by lox).[/dim]"
+                    )
+            except Exception:
+                pass
             print(
                 "[yellow]No contracts matched[/yellow] the filters.\n"
                 "Try widening DTE, increasing --max-premium, or loosening --max-spread-pct."

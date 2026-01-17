@@ -316,6 +316,7 @@ def register(ideas_app: typer.Typer) -> None:
         step_days: int = typer.Option(5, "--step-days", help="Evaluate every N trading days (keep it fast)"),
         top_k: int = typer.Option(3, "--top-k", help="Top/bottom K for spread metric"),
         basket: str = typer.Option("starter", "--basket", help="starter|extended (universe for evaluation)"),
+        sleeve: str = typer.Option("", "--sleeve", help="Optional: evaluate only tickers in a sleeve (macro|vol|ai-bubble|housing)"),
         feature_set: str = typer.Option("full", "--feature-set", help="full|fci (FCI = financial-conditions narrative)"),
         interaction_mode: str = typer.Option(
             "whitelist",
@@ -329,6 +330,7 @@ def register(ideas_app: typer.Typer) -> None:
         ),
         book: str = typer.Option("longshort", "--book", help="longshort|longonly (longonly is more realistic for most accounts)"),
         tc_bps: float = typer.Option(5.0, "--tc-bps", help="Transaction cost per side (bps) applied to turnover"),
+        nan_report: bool = typer.Option(True, "--nan-report/--no-nan-report", help="Print missingness diagnostics (inputs + dataset)"),
     ):
         """
         Walk-forward evaluation (leak-resistant) for the macro panel model.
@@ -360,14 +362,50 @@ def register(ideas_app: typer.Typer) -> None:
         settings = load_settings()
         console = Console()
 
+        # Universe: basket (default) or sleeve override.
         uni = get_universe(basket)
         tickers = list(uni.basket_equity)
-        px = fetch_equity_daily_closes(settings=settings, symbols=sorted(set(uni.tradable)), start=start, refresh=bool(refresh)).sort_index().ffill()
+        if (sleeve or "").strip():
+            from ai_options_trader.strategies.sleeves import resolve_sleeves
+
+            cfgs = resolve_sleeves([(sleeve or "").strip()])
+            cfg = cfgs[0]
+            tickers = list(cfg.universe_fn(basket) if cfg.universe_fn else [])  # type: ignore[misc]
+            tickers = [t.strip().upper() for t in tickers if t and t.strip()]
+        # Fetch prices for the tickers under evaluation (not the entire basket tradables).
+        px = (
+            fetch_equity_daily_closes(settings=settings, symbols=sorted(set(tickers)), start=start, refresh=bool(refresh))
+            .sort_index()
+            .ffill()
+        )
 
         Xr_full = build_regime_feature_matrix(settings=settings, start_date=start, refresh_fred=refresh)
         fs = (feature_set or "full").strip().lower()
         Xr = build_fci_feature_matrix(Xr_full) if fs == "fci" else Xr_full
         Xr = _augment_feature_set_with_whitelist_extra(fs=fs, Xr=Xr, Xr_full=Xr_full, whitelist_extra=whitelist_extra)
+
+        # Missingness diagnostics BEFORE dataset alignment/dropna.
+        if bool(nan_report):
+            try:
+                import numpy as np
+
+                msg = []
+                if Xr is None or Xr.empty:
+                    msg.append("regimes: empty")
+                else:
+                    cov = Xr.notna().mean().sort_values()
+                    worst = cov.head(10)
+                    msg.append(f"regimes: rows={len(Xr):,} cols={len(Xr.columns):,} (worst coverage: {dict(worst.round(3))})")
+                if px is None or px.empty:
+                    msg.append("prices: empty")
+                else:
+                    pcov = px.notna().mean().sort_values()
+                    worstp = pcov.head(min(10, len(pcov)))
+                    msg.append(f"prices: rows={len(px):,} cols={len(px.columns):,} (worst coverage: {dict(worstp.round(3))})")
+                console.print(Panel("\n".join(msg), title="NaN coverage (inputs)", expand=False))
+            except Exception:
+                pass
+
         ds = build_macro_panel_dataset(
             regime_features=Xr,
             prices=px,
@@ -376,6 +414,23 @@ def register(ideas_app: typer.Typer) -> None:
             interaction_mode=interaction_mode,
             whitelist_extra=whitelist_extra,
         )
+
+        if bool(nan_report):
+            try:
+                n_nan_X = int(ds.X.isna().sum().sum()) if not ds.X.empty else 0
+                n_nan_y = int(ds.y.isna().sum()) if getattr(ds, "y", None) is not None else 0
+                n_rows = int(ds.X.shape[0]) if not ds.X.empty else 0
+                n_cols = int(ds.X.shape[1]) if not ds.X.empty else 0
+                msg = f"dataset: rows={n_rows:,} cols={n_cols:,} nan_X={n_nan_X:,} nan_y={n_nan_y:,}"
+                console.print(Panel(msg, title="NaN coverage (dataset)", expand=False))
+            except Exception:
+                pass
+
+        # Hard safety: no NaNs should survive in the dataset used for eval.
+        if (not ds.X.empty) and bool(ds.X.isna().any().any()):
+            raise RuntimeError("Dataset contains NaNs in X after build_macro_panel_dataset (unexpected).")
+        if getattr(ds, "y", None) is not None and bool(ds.y.isna().any()):
+            raise RuntimeError("Dataset contains NaNs in y after build_macro_panel_dataset (unexpected).")
 
         # Dataset coverage (helps diagnose "why doesn't --start change anything?")
         ds_date_start = None
@@ -418,6 +473,7 @@ def register(ideas_app: typer.Typer) -> None:
                 f"dataset_date_end={ds_date_end}\n"
                 f"dataset_unique_dates={ds_unique_dates}\n"
                 f"dataset_unique_tickers={ds_unique_tickers}\n"
+                f"sleeve={(sleeve.strip() or None)}\n"
                 f"book={book_s}\n"
                 f"book_ret_net_mean={float(port[ret_col].mean()) if not port.empty else None}\n"
                 f"turnover_mean={float(port[turn_col].mean()) if not port.empty else None}\n"
@@ -531,6 +587,7 @@ def register(ideas_app: typer.Typer) -> None:
         export_csv: str = typer.Option("", "--export-csv", help="Write full dataset (features+label) to this CSV path"),
         export_parquet: str = typer.Option("", "--export-parquet", help="Write full dataset to this parquet path"),
         basket: str = typer.Option("starter", "--basket", help="starter|extended (universe for dataset build)"),
+        sleeve: str = typer.Option("", "--sleeve", help="Optional: build dataset only for a sleeve (macro|vol|ai-bubble|housing)"),
         feature_set: str = typer.Option("full", "--feature-set", help="full|fci (FCI = financial-conditions narrative)"),
         interaction_mode: str = typer.Option(
             "whitelist",
@@ -574,7 +631,18 @@ def register(ideas_app: typer.Typer) -> None:
 
         uni = get_universe(basket)
         tickers = list(uni.basket_equity)
-        px = fetch_equity_daily_closes(settings=settings, symbols=sorted(set(uni.tradable)), start=start, refresh=bool(refresh)).sort_index().ffill()
+        if (sleeve or "").strip():
+            from ai_options_trader.strategies.sleeves import resolve_sleeves
+
+            cfgs = resolve_sleeves([(sleeve or "").strip()])
+            cfg = cfgs[0]
+            tickers = list(cfg.universe_fn(basket) if cfg.universe_fn else [])  # type: ignore[misc]
+            tickers = [t.strip().upper() for t in tickers if t and t.strip()]
+        px = (
+            fetch_equity_daily_closes(settings=settings, symbols=sorted(set(tickers)), start=start, refresh=bool(refresh))
+            .sort_index()
+            .ffill()
+        )
 
         Xr_full = build_regime_feature_matrix(settings=settings, start_date=start, refresh_fred=refresh)
         fs = (feature_set or "full").strip().lower()
@@ -609,6 +677,7 @@ def register(ideas_app: typer.Typer) -> None:
             "date_end": str(pd.to_datetime(dates.max()).date()) if len(dates) else None,
             "horizon_days": int(horizon_days),
             "basket_equity": tickers,
+            "sleeve": (sleeve.strip() or None),
         }
         console.print(Panel(str(summary), title="Dataset summary", expand=False))
 

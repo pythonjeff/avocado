@@ -39,7 +39,7 @@ def register(autopilot_app: typer.Typer) -> None:
             "--engine",
             help="playbook|analog|ml (analog adds factor-momentum features to regime similarity; ml uses panel model forecast)",
         ),
-        basket: str = typer.Option("starter", "--basket", help="starter|extended (universe for idea generation)"),
+        basket: str = typer.Option("starter", "--basket", help="starter|extended|sp500 (universe for idea generation)"),
         sleeves: str = typer.Option(
             "",
             "--sleeves",
@@ -80,7 +80,7 @@ def register(autopilot_app: typer.Typer) -> None:
         allocation: str = typer.Option(
             "auto",
             "--allocation",
-            help="auto|equity100|50_50|both (applies to --budget-mode strict only). 'both' prints both plans and lets you pick one to execute.",
+            help="auto|equity100|50_50|70_30|both (applies to --budget-mode strict only). 'both' prints both plans and lets you pick one to execute.",
         ),
         max_new_trades: int = typer.Option(3, "--max-new-trades", help="Max new trades to open in one run"),
         min_new_trades: int = typer.Option(2, "--min-new-trades", help="Try to produce at least this many new trades (if feasible)"),
@@ -108,6 +108,11 @@ def register(autopilot_app: typer.Typer) -> None:
         llm_gate: bool = typer.Option(False, "--llm-gate", help="Require LLM DECISION=GO before allowing execution (risk overlay gate)"),
         llm_gate_override: bool = typer.Option(False, "--llm-gate-override", help="Ignore LLM gate and allow execution anyway"),
         llm_positions_outlook: bool = typer.Option(True, "--llm-positions-outlook/--no-llm-positions-outlook", help="Have the LLM give an outlook per current position before recommending new trades"),
+        show_basket: bool = typer.Option(
+            False,
+            "--show-basket/--no-show-basket",
+            help="Print the full equity basket used per sleeve (can be large for sp500).",
+        ),
     ):
         """
         Macro autopilot (MVP): run once.
@@ -150,7 +155,7 @@ def register(autopilot_app: typer.Typer) -> None:
         if budget_mode_s not in {"strict", "flex"}:
             budget_mode_s = "strict"
         allocation_s = (allocation or "auto").strip().lower()
-        if allocation_s not in {"auto", "equity100", "50_50", "both"}:
+        if allocation_s not in {"auto", "equity100", "50_50", "70_30", "both"}:
             allocation_s = "auto"
         flex_prefer_s = (flex_prefer or "options").strip().lower()
         if flex_prefer_s not in {"options", "shares"}:
@@ -160,6 +165,24 @@ def register(autopilot_app: typer.Typer) -> None:
             thesis_s = "none"
         min_new_trades_n = max(0, int(min_new_trades))
         max_new_trades_n = max(int(max_new_trades), min_new_trades_n if min_new_trades_n > 0 else 0)
+
+        def _print_basket(cfgs: list, basket_name: str) -> None:
+            try:
+                sleeve_tickers: dict[str, list[str]] = {}
+                all_syms: set[str] = set()
+                for s in cfgs:
+                    uni = s.universe_fn(basket_name) if s.universe_fn else []
+                    uni = [t.strip().upper() for t in (uni or []) if t and t.strip()]
+                    sleeve_tickers[s.name] = sorted(set(uni))
+                    all_syms.update(uni)
+                lines = [f"basket={basket_name}  union_count={len(all_syms)}"]
+                for name, syms in sleeve_tickers.items():
+                    lines.append(f"{name}: {len(syms)} symbols")
+                    if bool(show_basket):
+                        lines.append(", ".join(syms) if syms else "(none)")
+                console.print(Panel("\n".join(lines), title="Equity basket(s) used", expand=False))
+            except Exception:
+                pass
 
         # -------------------------------------------------------------------
         # Predictions-only mode: run the shared sleeve pipeline in "predict" mode and exit.
@@ -175,6 +198,7 @@ def register(autopilot_app: typer.Typer) -> None:
             if not sleeve_names:
                 sleeve_names = ["macro"]
             cfgs = resolve_sleeves(sleeve_names)
+            _print_basket(cfgs, str(basket))
 
             runs, meta = run_sleeves_pipeline(
                 settings=settings,
@@ -287,6 +311,7 @@ def register(autopilot_app: typer.Typer) -> None:
                     raise typer.Exit(code=0)
 
             cfgs = resolve_sleeves(sleeve_names)
+            _print_basket(cfgs, str(basket))
             runs, meta = run_sleeves_pipeline(
                 settings=settings,
                 sleeves=cfgs,
@@ -425,6 +450,8 @@ def register(autopilot_app: typer.Typer) -> None:
                     return {"name": "equity100", "budget_equity": budget_total, "budget_options": 0.0, "note": "Allocation: 100% equities"}
                 if k == "50_50":
                     return {"name": "50_50", "budget_equity": 0.50 * budget_total, "budget_options": 0.50 * budget_total, "note": "Allocation: 50% equities / 50% options"}
+                if k == "70_30":
+                    return {"name": "70_30", "budget_equity": 0.70 * budget_total, "budget_options": 0.30 * budget_total, "note": "Allocation: 70% equities / 30% options"}
                 # auto (legacy behavior)
                 # New drawdown-aware default:
                 # - If cash >= $500: 70% equities / 30% options
@@ -439,7 +466,7 @@ def register(autopilot_app: typer.Typer) -> None:
                 return {"name": "auto", "budget_equity": budget_total, "budget_options": 0.0, "note": "Allocation: 100% equities (auto since cash < $500)"}
 
             if allocation_s == "both":
-                budget_plans = [_strict_plan("equity100"), _strict_plan("50_50")]
+                budget_plans = [_strict_plan("equity100"), _strict_plan("50_50"), _strict_plan("70_30")]
             else:
                 budget_plans = [_strict_plan(allocation_s)]
 
@@ -1921,3 +1948,74 @@ def register(autopilot_app: typer.Typer) -> None:
                         continue
 
 
+    @autopilot_app.command("basic")
+    def basic_run(
+        sleeves: str = typer.Option(
+            "macro,vol,ai-bubble",
+            "--sleeves",
+            help="Comma/space-separated sleeves to include (default: macro,vol,ai-bubble).",
+        ),
+        basket: str = typer.Option("extended", "--basket", help="starter|extended|sp500"),
+        engine: str = typer.Option("ml", "--engine", help="playbook|analog|ml"),
+        allocation: str = typer.Option("70_30", "--allocation", help="auto|equity100|50_50|70_30"),
+        min_days: int = typer.Option(90, "--min-days", help="Min option DTE (calendar days)"),
+        max_days: int = typer.Option(120, "--max-days", help="Max option DTE (calendar days)"),
+        max_premium_usd: float = typer.Option(150.0, "--max-premium", help="Max premium per option contract (USD)"),
+        max_new_trades: int = typer.Option(8, "--max-new-trades", help="Max new trades to open in one run"),
+        min_new_trades: int = typer.Option(4, "--min-new-trades", help="Try to produce at least this many new trades"),
+        with_options: bool = typer.Option(True, "--with-options/--no-options", help="Include options when feasible"),
+        llm: bool = typer.Option(False, "--llm", help="Include LLM summary overlay"),
+        llm_news: bool = typer.Option(True, "--llm-news/--no-llm-news", help="Include news + calendar context in LLM overlay"),
+        show_basket: bool = typer.Option(False, "--show-basket/--no-show-basket", help="Print the full equity basket used"),
+    ):
+        """
+        Professional “basic run”:
+        - Uses available cash from Alpaca
+        - ML engine
+        - Multi-sleeve (macro/vol/ai-bubble)
+        - 70/30 equity/options split (strict budgeting)
+        - 90–120 day option horizon
+        """
+        run_once(
+            start="2012-01-01",
+            refresh=False,
+            engine=str(engine),
+            basket=str(basket),
+            sleeves=str(sleeves),
+            predictions=False,
+            top_predictions=15,
+            feature_set="fci",
+            interaction_mode="whitelist",
+            whitelist_extra="none",
+            thesis="none",
+            explain=True,
+            stop_loss_pct=0.30,
+            review_positions=True,
+            execute=False,
+            live=False,
+            budget_mode="strict",
+            allocation=str(allocation),
+            max_new_trades=int(max_new_trades),
+            min_new_trades=int(min_new_trades),
+            flex_prefer="options",
+            with_options=bool(with_options),
+            max_premium_usd=float(max_premium_usd),
+            min_days=int(min_days),
+            max_days=int(max_days),
+            target_abs_delta=0.30,
+            max_spread_pct=0.30,
+            shares_budget_usd=100.0,
+            require_positive_score=True,
+            llm=bool(llm),
+            llm_model="",
+            llm_temperature=0.2,
+            llm_news=bool(llm_news),
+            llm_calendar_days=10,
+            llm_calendar_max_items=18,
+            llm_news_days=7,
+            llm_news_max_items=18,
+            llm_gate=False,
+            llm_gate_override=False,
+            llm_positions_outlook=True,
+            show_basket=bool(show_basket),
+        )

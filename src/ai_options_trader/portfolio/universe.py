@@ -91,8 +91,17 @@ STARTER_UNIVERSE = PortfolioUniverse(
         "SMH",
         "KRE",
         # Optional sector tilts (still liquid; may be pricier but useful)
-        "XLF",
-        "XLE",
+        "XLF",  # Financials
+        "XLE",  # Energy
+        "XLK",  # Technology
+        "XLY",  # Discretionary
+        "XLP",  # Staples
+        "XLI",  # Industrials
+        "XLV",  # Health care
+        "XLU",  # Utilities
+        "XLB",  # Materials
+        "XLC",  # Communication services
+        "XLRE", # Real estate
     ),
 )
 
@@ -119,6 +128,8 @@ EXTENDED_UNIVERSE = PortfolioUniverse(
                 "XLY",   # Discretionary (cycle)
                 "XLU",   # Utilities (rates-sensitive defensive)
                 "XLB",   # Materials (cycle/commod linkage)
+                "XLC",   # Communication services
+                "XLRE",  # Real estate
                 # Thematic risk-on / risk-off
                 "SMH",   # Semiconductors (rates/AI beta)
                 "ARKK",  # High beta / duration proxy
@@ -175,6 +186,8 @@ EXTENDED_UNIVERSE = PortfolioUniverse(
                     "XLY",
                     "XLU",
                     "XLB",
+                    "XLC",
+                    "XLRE",
                     "SMH",
                     "ARKK",
                     "KRE",
@@ -252,14 +265,45 @@ HOUSING_UNIVERSE = PortfolioUniverse(
 )
 
 
+# Solar / clean energy basket: solar manufacturers + ETF proxy.
+SOLAR_UNIVERSE = PortfolioUniverse(
+    basket_equity=(
+        "TAN",   # Solar ETF
+        "FSLR",  # First Solar
+        "CSIQ",  # Canadian Solar
+        "JKS",   # JinkoSolar
+        "SPWR",  # SunPower
+        "SPY",   # Benchmark / beta anchor
+        "SLV",   # Silver proxy (input cost linkage)
+    ),
+    tradable=(
+        "TAN",
+        "FSLR",
+        "CSIQ",
+        "JKS",
+        "SPWR",
+        "SPY",
+        "SLV",
+    ),
+)
+
+
 def get_universe(name: str) -> PortfolioUniverse:
     """
     Resolve a named universe:
     - starter
     - extended
+    - sp500
     - default
     """
     n = (name or "starter").strip().lower()
+    if n.startswith("sp"):
+        # Dynamically load S&P 500 constituents (cached). This avoids hard-coding 500 tickers in-repo.
+        from ai_options_trader.universe.sp500 import load_sp500_universe
+
+        uni = load_sp500_universe(refresh=False)
+        tickers = tuple(uni.tickers)
+        return PortfolioUniverse(basket_equity=tickers, tradable=tickers)
     if n.startswith("e"):
         return EXTENDED_UNIVERSE
     if n.startswith("h"):

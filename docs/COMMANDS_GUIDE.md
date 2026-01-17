@@ -9,6 +9,7 @@
 - **`lox autopilot run-once`**: generates a budgeted trade plan (default engine = regime analogs + factor momentum).
 - **`lox nav snapshot`**: write a NAV snapshot from Alpaca and compute returns.
 - **`lox nav investor report`**: investor ownership/basis/value/P&L via unitized NAV.
+- **`lox weekly report`**: weekly summary (NAV snapshot, trades, thesis, macro performance).
 
 ### 2) Execution (paper-first)
 - **`lox autopilot run-once --execute`**: prompts and submits **paper** orders.

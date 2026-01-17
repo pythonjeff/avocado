@@ -192,7 +192,6 @@ def register(app: typer.Typer) -> None:
         settings = load_settings()
         console = Console()
         trading, _data = make_clients(settings)
-
         mode = "PAPER" if bool(settings.alpaca_paper) else "LIVE"
         live_ok = bool(live) and (not bool(settings.alpaca_paper))
         if execute and (not settings.alpaca_paper) and (not live_ok):
@@ -256,9 +255,7 @@ def register(app: typer.Typer) -> None:
 
         if not execute:
             console.print("[dim]DRY RUN[/dim]: re-run with `--execute` to submit this order.")
-            raise typer.Exit(code=0)
-
-        # Submit: prefer notional market order (fractional shares). Fallback to whole-share qty.
+            raise typer.Exit(code=0)        # Submit: prefer notional market order (fractional shares). Fallback to whole-share qty.
         try:
             from ai_options_trader.execution.alpaca import submit_equity_notional_order, submit_equity_order
 
