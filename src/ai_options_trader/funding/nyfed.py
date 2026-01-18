@@ -58,6 +58,10 @@ def fetch_nyfed_secured_rate(
             pass
 
     import requests
+    import urllib3
+
+    # Suppress only the InsecureRequestWarning for this specific call
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     url = f"https://markets.newyorkfed.org/api/rates/secured/{rate_l}.json"
     # Some environments (notably certain macOS Python builds) can throw odd SSL PermissionErrors.

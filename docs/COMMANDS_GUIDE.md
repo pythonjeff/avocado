@@ -28,6 +28,9 @@
 - **`lox nav investor contribute JL 50 --note "Feb add"`**: logs a contribution to **both** ledgers (fund cashflows + investor flows).
 - **`lox nav show`**: show the NAV sheet history.
 
+**Ledger note:** `nav_flows.csv` (fund cashflows) and `nav_investor_flows.csv` (investor ledger) are separate by design.  
+Use `lox nav investor contribute` for real investor cash moves so both ledgers stay in sync.
+
 ### 6) Model diagnostics (research)
 - **`lox model macro-model-eval --basket starter --book longonly`**: walk-forward eval (Spearman, hit rate, top–bottom spread, portfolio returns).
 - **`lox model macro-model-eval-ab --basket starter --book longonly`**: A/B sweep across regime families (`whitelist-extra`).
@@ -42,6 +45,7 @@
     - `lox labs fiscal snapshot`
     - `lox labs rates snapshot`
     - `lox labs regimes show`
+    - `lox labs ticker news -t NVDA`
 
 ### Notes
 - Run **`lox <command> --help`** for flags.

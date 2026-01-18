@@ -8,10 +8,11 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from ai_options_trader.nav.store import _parse_ts, read_nav_sheet
+from ai_options_trader.utils.dates import parse_timestamp, utc_now_iso
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now_iso()
 
 
 def default_investor_flows_path() -> str:
@@ -79,53 +80,13 @@ def _parse_money(x: object) -> float:
     return float(s)
 
 
-def _excel_serial_to_iso(x: float) -> str:
-    """
-    Excel serial date conversion (1900 date system).
-    Convention: day 0 is 1899-12-30 in many conversions (accounts for Excel's 1900-leap-year bug).
-    """
-    base = datetime(1899, 12, 30, tzinfo=timezone.utc)
-    dt = base + timedelta(days=float(x))
-    return dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-
-
 def _normalize_ts(x: object) -> str:
     """
-    Accept:
-    - ISO timestamps: 2026-01-01T00:00:00+00:00
-    - ISO dates: 2026-01-01   (interpreted as midnight UTC)
-    - Excel-ish dates: 01/01/2026, 1/1/2026
-    - Excel serial numbers: 46031
+    Accept various timestamp/date formats and return ISO8601 string.
+    
+    Wraps utils.dates.parse_timestamp for consistency.
     """
-    s = str(x if x is not None else "").strip()
-    if not s:
-        raise ValueError("empty date")
-    # Excel serial date (common in .xlsx XML).
-    try:
-        f = float(s)
-        if f > 20000:
-            return _excel_serial_to_iso(f)
-    except Exception:
-        pass
-    # Fast-path ISO-ish.
-    if "T" in s:
-        return _parse_ts(s).isoformat()
-    # Date only.
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).isoformat()
-    except Exception:
-        pass
-    # Common Excel export: MM/DD/YYYY
-    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-        try:
-            dt2 = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-            return dt2.isoformat()
-        except Exception:
-            continue
-    raise ValueError(f"unsupported date format: {s!r}")
+    return parse_timestamp(str(x) if x is not None else "").isoformat()
 
 
 def _xlsx_first_sheet_table(*, xlsx_path: str) -> list[dict[str, str]]:

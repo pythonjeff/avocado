@@ -38,6 +38,25 @@ class FundingInputs(BaseModel):
     vol_tight_bps: Optional[float] = None
     vol_stress_bps: Optional[float] = None
 
+    # ON RRP (critical liquidity buffer)
+    on_rrp_usd_bn: Optional[float] = None  # already in billions (stored as millions, displayed /1000)
+    on_rrp_chg_13w: Optional[float] = None  # 13-week change (millions)
+    z_on_rrp: Optional[float] = None  # z-score vs 3y history
+    
+    # Bank reserves (critical liquidity level)
+    bank_reserves_usd_bn: Optional[float] = None  # millions in storage
+    bank_reserves_chg_13w: Optional[float] = None
+    z_bank_reserves: Optional[float] = None
+    
+    # TGA (Treasury General Account - inverse driver of RRP/reserves)
+    tga_usd_bn: Optional[float] = None  # millions in storage
+    tga_chg_4w: Optional[float] = None
+    z_tga_chg_4w: Optional[float] = None
+    
+    # Fed balance sheet (QT pace)
+    fed_assets_usd_bn: Optional[float] = None  # millions in storage
+    fed_assets_chg_13w: Optional[float] = None
+
     # Debug / transparency
     components: Dict[str, Optional[float]] = Field(default_factory=dict)
 

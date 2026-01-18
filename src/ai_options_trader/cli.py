@@ -77,6 +77,8 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.rates_cmd import register as register_rates
     from ai_options_trader.cli_commands.fiscal_cmd import register as register_fiscal
     from ai_options_trader.cli_commands.volatility_cmd import register as register_volatility
+    from ai_options_trader.cli_commands.scenarios_cmd import register as register_scenarios
+    from ai_options_trader.cli_commands.scenarios_ml_cmd import register_ml as register_scenarios_ml
     from ai_options_trader.cli_commands.commodities_cmd import register as register_commodities
     from ai_options_trader.cli_commands.crypto_cmd import register as register_crypto
     from ai_options_trader.cli_commands.ticker_cmd import register as register_ticker
@@ -92,6 +94,7 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.portfolio_cmd import register as register_portfolio
     from ai_options_trader.cli_commands.account_cmd import register as register_account
     from ai_options_trader.cli_commands.weekly_report_cmd import register as register_weekly_report
+    from ai_options_trader.cli_commands.fedfunds_cmd import register as register_fedfunds
 
     # Clean surface
     register_options(options_app)
@@ -111,12 +114,15 @@ def _register_commands() -> None:
     register_select(labs_app)
     register_portfolio(labs_app)
     register_regimes(labs_app)
+    register_scenarios(labs_app)
+    register_scenarios_ml(labs_app)  # ML-enhanced scenarios
     register_macro(macro_app)
     register_tariff(tariff_app)
     register_funding(funding_app)
     register_liquidity(liquidity_app)
     register_usd(usd_app)
     register_monetary(monetary_app)
+    register_fedfunds(monetary_app)
     register_rates(rates_app)
     register_fiscal(fiscal_app)
     register_volatility(vol_app)

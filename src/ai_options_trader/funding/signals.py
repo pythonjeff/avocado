@@ -14,8 +14,8 @@ from ai_options_trader.macro.transforms import merge_series_daily
 FUNDING_FRED_SERIES: Dict[str, str] = {
     "EFFR": "DFF",
     "SOFR": "SOFR",
-    "TGCR": "TGCR",
-    "BGCR": "BGCR",
+    "TGCR": "TGCRRATE",  # Updated to use TGCRRATE series ID
+    "BGCR": "BGCRRATE",  # Updated to use BGCRRATE series ID  
     # Optional cross-checks
     "OBFR": "OBFR",
 }
@@ -167,6 +167,17 @@ def build_funding_state(settings: Settings, start_date: str = "2011-01-01", refr
     # Only require the corridor core; TGCR/BGCR are best-effort.
     last = df.dropna(subset=["EFFR", "SOFR", "CORRIDOR_SPREAD_BPS"]).iloc[-1]
 
+    # Fetch ON RRP + reserves + TGA data from monetary/fiscal modules
+    from ai_options_trader.monetary.signals import build_monetary_dataset
+    from ai_options_trader.fiscal.signals import _tga_behavior_metrics
+    from ai_options_trader.data.fred import FredClient
+    
+    monetary_df = build_monetary_dataset(settings=settings, start_date=start_date, refresh=refresh)
+    monetary_last = monetary_df.dropna(subset=["ON_RRP"]).iloc[-1] if not monetary_df.empty else None
+    
+    fred = FredClient(api_key=settings.FRED_API_KEY) if settings.FRED_API_KEY else None
+    tga_metrics = _tga_behavior_metrics(fred=fred, start_date=start_date, refresh=refresh) if fred else None
+
     inp = FundingInputs(
         effr=float(last["EFFR"]) if pd.notna(last["EFFR"]) else None,
         sofr=float(last["SOFR"]) if pd.notna(last["SOFR"]) else None,
@@ -191,6 +202,17 @@ def build_funding_state(settings: Settings, start_date: str = "2011-01-01", refr
         vol_baseline_bps=float(last["VOL_BASE"]) if pd.notna(last.get("VOL_BASE")) else None,
         vol_tight_bps=float(last["VOL_TIGHT"]) if pd.notna(last.get("VOL_TIGHT")) else None,
         vol_stress_bps=float(last["VOL_STRESS"]) if pd.notna(last.get("VOL_STRESS")) else None,
+        on_rrp_usd_bn=float(monetary_last["ON_RRP"]) if monetary_last is not None and pd.notna(monetary_last.get("ON_RRP")) else None,
+        on_rrp_chg_13w=float(monetary_last["ON_RRP_CHG_13W"]) if monetary_last is not None and pd.notna(monetary_last.get("ON_RRP_CHG_13W")) else None,
+        z_on_rrp=float(monetary_last["Z_ON_RRP"]) if monetary_last is not None and pd.notna(monetary_last.get("Z_ON_RRP")) else None,
+        bank_reserves_usd_bn=float(monetary_last["RESERVES"]) if monetary_last is not None and pd.notna(monetary_last.get("RESERVES")) else None,
+        bank_reserves_chg_13w=float(monetary_last["RESERVES_CHG_13W"]) if monetary_last is not None and pd.notna(monetary_last.get("RESERVES_CHG_13W")) else None,
+        z_bank_reserves=float(monetary_last["Z_RESERVES"]) if monetary_last is not None and pd.notna(monetary_last.get("Z_RESERVES")) else None,
+        tga_usd_bn=float(tga_metrics["tga_level"]) if tga_metrics and tga_metrics.get("tga_level") is not None else None,
+        tga_chg_4w=float(tga_metrics["tga_d_4w"]) if tga_metrics and tga_metrics.get("tga_d_4w") is not None else None,
+        z_tga_chg_4w=float(tga_metrics["tga_z_d_4w"]) if tga_metrics and tga_metrics.get("tga_z_d_4w") is not None else None,
+        fed_assets_usd_bn=float(monetary_last["FED_ASSETS"]) if monetary_last is not None and pd.notna(monetary_last.get("FED_ASSETS")) else None,
+        fed_assets_chg_13w=float(monetary_last["FED_ASSETS_CHG_13W"]) if monetary_last is not None and pd.notna(monetary_last.get("FED_ASSETS_CHG_13W")) else None,
         components={
             "baseline_window_days": float(252 * 3),
             "k_stress": float(last.get("K_STRESS")) if pd.notna(last.get("K_STRESS")) else 1.75,

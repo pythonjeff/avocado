@@ -11,6 +11,66 @@ from ai_options_trader.config import Settings
 FMP_BASE_URL = "https://financialmodelingprep.com/api"
 
 
+def fetch_realtime_quotes(
+    *,
+    settings: Settings,
+    tickers: list[str],
+    cache_max_age: timedelta = timedelta(minutes=5),
+) -> dict[str, float]:
+    """
+    Fetch real-time stock/ETF prices from FMP.
+    
+    Endpoint: /api/v3/quote/{symbols}
+    
+    Returns:
+        dict mapping ticker -> price (e.g., {"SPY": 585.23, "HYG": 77.45})
+    """
+    if not settings.fmp_api_key or not tickers:
+        return {}
+    
+    # Clean tickers
+    clean_tickers = [t.strip().upper() for t in tickers if t.strip()]
+    if not clean_tickers:
+        return {}
+    
+    symbols_str = ",".join(clean_tickers)
+    key = f"fmp_quotes_{symbols_str}"
+    p = cache_path(key)
+    cached = read_cache(p, max_age=cache_max_age)
+    if isinstance(cached, dict):
+        return cached
+    
+    url = f"{FMP_BASE_URL}/v3/quote/{symbols_str}"
+    import requests
+    
+    try:
+        resp = requests.get(
+            url,
+            params={"apikey": settings.fmp_api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        result = {}
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    ticker = item.get("symbol", "").strip().upper()
+                    price = item.get("price")
+                    if ticker and price is not None:
+                        try:
+                            result[ticker] = float(price)
+                        except (ValueError, TypeError):
+                            pass
+        
+        if result:
+            write_cache(p, result)
+        return result
+    except Exception:
+        return {}
+
+
 def _parse_iso_date(s: str | None) -> date | None:
     if not s:
         return None

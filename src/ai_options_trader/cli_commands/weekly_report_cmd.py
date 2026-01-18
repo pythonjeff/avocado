@@ -8,11 +8,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from ai_options_trader.config import Settings, load_settings
+from ai_options_trader.config import load_settings
 from ai_options_trader.data.alpaca import fetch_option_chain, to_candidates
 from ai_options_trader.data.alpaca import make_clients
 from ai_options_trader.data.market import fetch_equity_daily_closes
 from ai_options_trader.utils.occ import parse_occ_option_symbol
+from ai_options_trader.utils.settings import safe_load_settings
 
 
 def _now_utc_iso() -> str:
@@ -87,7 +88,7 @@ def _weekly_ust10y_change() -> tuple[str, str]:
     Best-effort weekly change in 10Y yield (DGS10, FRED).
     Returns (level, weekly_change) as strings, or DATA NOT PROVIDED.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED"
     try:
@@ -116,7 +117,7 @@ def _ust10y_live_yield() -> tuple[str, str, str]:
     Best-effort intraday 10Y yield using FMP ^TNX quote as a proxy.
     Returns (yield, asof, note).
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FMP_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FMP_API_KEY missing"
     try:
@@ -151,7 +152,7 @@ def _fred_latest_and_change(series_id: str, lookback: int = 5) -> tuple[str, str
     """
     Returns (latest, change, asof, note) for a FRED series. Change is vs ~1 week.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FRED_API_KEY missing"
     try:
@@ -181,7 +182,7 @@ def _fred_latest_and_change_days(
     """
     Returns (latest, change, asof, note, change_num) for a FRED series using day-based lookback.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FRED_API_KEY missing", None, None
     try:
@@ -217,7 +218,7 @@ def _fred_yoy_and_change_days(
     """
     Returns YoY (%) for a level series (e.g., CPIAUCSL), plus change in YoY vs lookback days.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FRED_API_KEY missing", None, None
     try:
@@ -262,7 +263,7 @@ def _fred_latest(series_id: str) -> tuple[str, str, str]:
     """
     Returns (latest, asof, note) for a FRED series.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FRED_API_KEY missing"
     try:
@@ -287,7 +288,7 @@ def _ust10y_change_1m_3m() -> tuple[str, str, str, str]:
     """
     Returns (asof, change_1m, change_3m, note).
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings or not settings.FRED_API_KEY:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "FRED_API_KEY missing"
     try:
@@ -313,34 +314,13 @@ def _ust10y_change_1m_3m() -> tuple[str, str, str, str]:
         return asof, f"{chg_1m:+.2f}pp", f"{chg_3m:+.2f}pp", ""
     except Exception as e:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", f"FRED error: {e}"
-def _safe_settings():
-    try:
-        return load_settings()
-    except Exception:
-        try:
-            # Fallback: ignore .env if it is unreadable, rely on environment vars.
-            return Settings.model_construct(
-                AOT_PRICE_SOURCE=os.getenv("AOT_PRICE_SOURCE", "fmp"),
-                ALPACA_API_KEY=os.getenv("ALPACA_API_KEY", ""),
-                ALPACA_API_SECRET=os.getenv("ALPACA_API_SECRET", ""),
-                ALPACA_PAPER=str(os.getenv("ALPACA_PAPER", "true")).lower() not in {"0", "false", "no"},
-                ALPACA_DATA_KEY=os.getenv("ALPACA_DATA_KEY"),
-                ALPACA_DATA_SECRET=os.getenv("ALPACA_DATA_SECRET"),
-                ALPACA_OPTIONS_FEED=os.getenv("ALPACA_OPTIONS_FEED"),
-                OPENAI_API_KEY=os.getenv("OPENAI_API_KEY"),
-                OPENAI_MODEL=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                FRED_API_KEY=os.getenv("FRED_API_KEY"),
-                FMP_API_KEY=os.getenv("FMP_API_KEY"),
-            )
-        except Exception:
-            return None
 
 
 def _hy_oas_metrics() -> tuple[str, str, str, str, float | None]:
     """
     Returns (asof, latest_bps, change_bps) for HY OAS, or DATA NOT PROVIDED.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "settings unavailable", None
     if not settings.FRED_API_KEY:
@@ -374,7 +354,7 @@ def _rel_return_vs(symbol: str, benchmark: str, lookback: int = 63) -> tuple[str
     """
     Returns (asof, rel_return_pct) for symbol vs benchmark, or DATA NOT PROVIDED.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "settings unavailable", None
     try:
@@ -398,7 +378,7 @@ def _ratio_change(numerator: str, denominator: str, lookback: int = 63) -> tuple
     """
     Returns (asof, latest_ratio, change_pct) for numerator/denominator ratio.
     """
-    settings = _safe_settings()
+    settings = safe_load_settings()
     if not settings:
         return "DATA NOT PROVIDED", "DATA NOT PROVIDED", "DATA NOT PROVIDED", "settings unavailable", None
     try:
@@ -514,7 +494,7 @@ def register(weekly_app: typer.Typer) -> None:
                 mid_by_symbol: dict[str, float] = {}
                 if data_client is not None:
                     try:
-                        settings = _safe_settings()
+                        settings = safe_load_settings()
                         underlyings = sorted(
                             {
                                 opt["underlying"]

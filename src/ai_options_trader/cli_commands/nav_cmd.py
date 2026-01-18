@@ -32,6 +32,15 @@ def register(nav_app: typer.Typer) -> None:
 
         path = append_cashflow(ts=ts or None, amount=float(amount), note=note, path=flows_path or None)
         Console().print(Panel(f"Logged cashflow: {amount:+.2f}\nflows: {path}", title="NAV flow", expand=False))
+        Console().print(
+            Panel(
+                "Note: This updates the fund cashflow ledger only.\n"
+                "For investor deposits/withdrawals that must also update ownership, use:\n"
+                "`lox nav investor contribute ...`",
+                title="Ledger note",
+                expand=False,
+            )
+        )
 
     @investor_app.command("seed")
     def investor_seed(
@@ -77,6 +86,15 @@ def register(nav_app: typer.Typer) -> None:
         path = append_investor_flow(code=code, amount=float(amount), note=note, ts=ts or None, path=investor_flows_path or None)
         Console().print(
             Panel(f"Logged investor flow: {code.upper()} {amount:+.2f}\nflows: {path}", title="NAV investor flow", expand=False)
+        )
+        Console().print(
+            Panel(
+                "Note: This updates the investor ledger only.\n"
+                "If this is a real cash contribution/withdrawal, also log the fund cashflow with:\n"
+                "`lox nav flow ...` or use `lox nav investor contribute ...` to update both in one step.",
+                title="Ledger note",
+                expand=False,
+            )
         )
 
     @investor_app.command("report")
@@ -694,6 +712,14 @@ def register(nav_app: typer.Typer) -> None:
                 f"investor_flows: {rep.get('path')}\n"
                 f"preview: {rep.get('preview')}",
                 title="NAV investor import",
+                expand=False,
+            )
+        )
+        Console().print(
+            Panel(
+                "Note: Import updates the investor ledger only. If these rows represent real cash flows,\n"
+                "log matching fund flows with `lox nav flow ...` (or re-import via `lox nav investor contribute`).",
+                title="Ledger note",
                 expand=False,
             )
         )

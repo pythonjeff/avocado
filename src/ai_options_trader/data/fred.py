@@ -16,15 +16,41 @@ DEFAULT_SERIES = {
     # inflation "reality"
     "CPIAUCSL": FredSeries("CPIAUCSL", "monthly"),
     "CPILFESL": FredSeries("CPILFESL", "monthly"),
+    "MEDCPIM158SFRBCLE": FredSeries("MEDCPIM158SFRBCLE", "monthly"),  # Median CPI (Cleveland Fed)
     # labor market
     "PAYEMS": FredSeries("PAYEMS", "monthly"),  # Total Nonfarm Payrolls (level)
+    "UNRATE": FredSeries("UNRATE", "monthly"),  # Unemployment rate
+    "ICSA": FredSeries("ICSA", "weekly"),  # Initial jobless claims
     # inflation "expectations"
-    "T5YIE": FredSeries("T5YIE", "daily"),
-    "T10YIE": FredSeries("T10YIE", "daily"),
+    "T5YIE": FredSeries("T5YIE", "daily"),  # 5Y breakeven
+    "T10YIE": FredSeries("T10YIE", "daily"),  # 10Y breakeven
+    "T5YIFR": FredSeries("T5YIFR", "daily"),  # 5y5y forward inflation expectation
     # rates
     "DFF": FredSeries("DFF", "daily"),
     "DGS2": FredSeries("DGS2", "daily"),
     "DGS10": FredSeries("DGS10", "daily"),
+    # credit spreads (systemic stress)
+    "BAMLH0A0HYM2": FredSeries("BAMLH0A0HYM2", "daily"),  # ICE BofA US High Yield OAS
+    "BAMLC0A0CM": FredSeries("BAMLC0A0CM", "daily"),  # ICE BofA US Corporate OAS (IG)
+    # volatility
+    "VIXCLS": FredSeries("VIXCLS", "daily"),  # CBOE VIX (1-month implied vol)
+    # VXMTCLS (VIX Mid-Term) removed due to persistent FRED API issues
+    # dollar / FX
+    "DTWEXBGS": FredSeries("DTWEXBGS", "daily"),  # Trade Weighted US Dollar Index: Broad, Goods and Services
+    # commodities
+    "DCOILWTICO": FredSeries("DCOILWTICO", "daily"),  # WTI Crude Oil Price
+    # housing
+    "MORTGAGE30US": FredSeries("MORTGAGE30US", "weekly"),  # 30-Year Fixed Rate Mortgage Average
+    "CSUSHPISA": FredSeries("CSUSHPISA", "monthly"),  # S&P/Case-Shiller U.S. National Home Price Index
+}
+
+# Optional series that won't crash if unavailable
+OPTIONAL_SERIES = {
+    "DCOILWTICO",  # Oil (weekends/holidays)
+    "VIXCLS",  # VIX (market hours only)
+    # "VXMTCLS",  # VIX Mid-Term - Removed due to FRED API issues
+    "BAMLH0A0HYM2",  # Credit spreads (sometimes delayed)
+    "BAMLC0A0CM",
 }
 
 
