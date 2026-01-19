@@ -13,9 +13,9 @@ nav_app = typer.Typer(add_completion=False, help="NAV sheet + investor ledger (f
 app.add_typer(nav_app, name="nav")
 options_app = typer.Typer(add_completion=False, help="Options scanners (moonshot + helpers)")
 app.add_typer(options_app, name="options")
-ideas_app = typer.Typer(add_completion=False, help="Idea generation (event + playbooks)")
+ideas_app = typer.Typer(add_completion=False, help="Trade ideas (catalyst + screen)")
 app.add_typer(ideas_app, name="ideas")
-model_app = typer.Typer(add_completion=False, help="Model research (macro panel ML: eval/A-B/dataset)")
+model_app = typer.Typer(add_completion=False, help="ML model (predict/eval/inspect)")
 app.add_typer(model_app, name="model")
 live_app = typer.Typer(add_completion=False, help="Live console (interactive monitoring + manual crypto execution)")
 app.add_typer(live_app, name="live")
@@ -70,6 +70,9 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.macro_cmd import register as register_macro
     from ai_options_trader.cli_commands.tariff_cmd import register as register_tariff
     from ai_options_trader.cli_commands.options_cmd import register as register_options
+    from ai_options_trader.cli_commands.options_pick_cmd import register_pick
+    from ai_options_trader.cli_commands.options_scanner_cmd import register_scanners
+    from ai_options_trader.cli_commands.options_moonshot_cmd import register_moonshot
     from ai_options_trader.cli_commands.funding_cmd import register as register_funding
     from ai_options_trader.cli_commands.liquidity_cmd import register as register_liquidity
     from ai_options_trader.cli_commands.usd_cmd import register as register_usd
@@ -85,8 +88,9 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.housing_cmd import register as register_housing
     from ai_options_trader.cli_commands.solar_cmd import register as register_solar
     from ai_options_trader.cli_commands.regimes_cmd import register as register_regimes
-    from ai_options_trader.cli_commands.ideas_cmd import register as register_ideas
-    from ai_options_trader.cli_commands.macro_model_cmd import register as register_macro_model
+    from ai_options_trader.cli_commands.ideas_cmd import register as register_ideas_legacy
+    from ai_options_trader.cli_commands.ideas_clean import register_ideas as register_ideas_clean
+    from ai_options_trader.cli_commands.model_cmd import register_model
     from ai_options_trader.cli_commands.live_cmd import register as register_live
     from ai_options_trader.cli_commands.track_cmd import register as register_track
     from ai_options_trader.cli_commands.nav_cmd import register as register_nav
@@ -105,14 +109,20 @@ def _register_commands() -> None:
     register_core(app)
     register_dashboard(app)  # Main dashboard command
     
-    # Clean surface
-    register_options(options_app)
-    register_scan_commands(options_app)  # New modular scan commands
-    register_ideas(ideas_app)
-    # Keep back-compat: model commands remain under `lox ideas ...`
-    register_macro_model(ideas_app)
-    # New clean home for model commands:
-    register_macro_model(model_app)
+    # Options: modular command registration
+    register_options(options_app)       # scan, most-traded
+    register_pick(options_app)          # pick
+    register_scanners(options_app)      # sp500-under-budget, etf-under-budget
+    register_moonshot(options_app)      # moonshot
+    register_scan_commands(options_app) # Additional scan commands
+    
+    # Ideas: new clean commands + legacy for back-compat
+    register_ideas_clean(ideas_app)  # catalyst, screen
+    register_ideas_legacy(ideas_app)  # event, macro-playbook (legacy aliases)
+    
+    # Model: clean unified commands
+    register_model(model_app)  # predict, eval, inspect
+    
     register_track(track_app)
     register_nav(nav_app)
     register_autopilot(autopilot_app)

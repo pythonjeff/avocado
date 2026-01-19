@@ -17,8 +17,170 @@ def _to_float(x) -> float | None:
 
 
 def register(nav_app: typer.Typer) -> None:
-    investor_app = typer.Typer(add_completion=False, help="Investor ledger (initials + amounts) using unitized NAV")
+    investor_app = typer.Typer(add_completion=False, help="Investor ledger (initials + amounts) using unitized NAV", invoke_without_command=True)
     nav_app.add_typer(investor_app, name="investor")
+
+    @investor_app.callback()
+    def investor_default(ctx: typer.Context):
+        """Show investor ownership (shortcut for `lox nav investor report`)."""
+        if ctx.invoked_subcommand is None:
+            # No subcommand given - show quick summary
+            _show_investor_summary()
+
+    def _show_investor_summary():
+        """Quick investor summary when no subcommand given."""
+        from ai_options_trader.nav.investors import investor_report, default_investor_flows_path
+        from ai_options_trader.nav.store import default_nav_sheet_path
+        
+        c = Console()
+        path_sheet = default_nav_sheet_path()
+        path_inv = default_investor_flows_path()
+        
+        try:
+            rep = investor_report(nav_sheet_path=path_sheet, investor_flows_path=path_inv)
+        except Exception as e:
+            c.print(f"[red]Error loading investor data:[/red] {e}")
+            c.print("[dim]Try: lox nav investor seed 'JL:1000,TG:500'[/dim]")
+            return
+        
+        rows = rep.get("rows") or []
+        if not rows:
+            c.print(Panel(
+                "No investors yet.\n"
+                "Seed with: lox nav investor seed 'JL:1000,TG:500'",
+                title="Investors",
+                expand=False,
+            ))
+            return
+        
+        # Summary header
+        nav_per_unit = float(rep.get("nav_per_unit") or 1.0)
+        equity = float(rep.get("equity") or 0.0)
+        asof = rep.get("asof") or "—"
+        
+        c.print(Panel(
+            f"Equity: ${equity:,.2f} | NAV/Unit: {nav_per_unit:.4f} | As of: {str(asof)[:19]}",
+            title="Investor Summary",
+            expand=False,
+        ))
+        
+        # Investor table
+        tbl = Table()
+        tbl.add_column("Investor", style="bold cyan")
+        tbl.add_column("Ownership", justify="right")
+        tbl.add_column("Value", justify="right", style="green")
+        tbl.add_column("P&L", justify="right")
+        tbl.add_column("Return", justify="right")
+        
+        for r in rows:
+            own = r.get("ownership")
+            ret = r.get("return")
+            pnl = float(r.get("pnl") or 0.0)
+            pnl_style = "green" if pnl >= 0 else "red"
+            
+            tbl.add_row(
+                str(r.get("code") or ""),
+                "—" if own is None else f"{float(own)*100:.1f}%",
+                f"${float(r.get('value') or 0.0):,.2f}",
+                f"[{pnl_style}]${pnl:+,.2f}[/{pnl_style}]",
+                "—" if ret is None else f"{float(ret)*100:+.1f}%",
+            )
+        
+        c.print(tbl)
+        c.print("[dim]For detailed report: lox nav investor report[/dim]")
+
+    @nav_app.command("summary")
+    def nav_summary():
+        """
+        Quick NAV summary with investor ownership.
+        
+        This is the easiest way to see current NAV and who owns what.
+        """
+        from ai_options_trader.config import load_settings
+        from ai_options_trader.data.alpaca import make_clients
+        from ai_options_trader.nav.investors import investor_report, default_investor_flows_path
+        from ai_options_trader.nav.store import default_nav_sheet_path
+        
+        c = Console()
+        settings = load_settings()
+        
+        # Get live account data
+        try:
+            trading, _data = make_clients(settings)
+            acct = trading.get_account()
+            equity = _to_float(getattr(acct, "equity", None)) or 0.0
+            cash = _to_float(getattr(acct, "cash", None)) or 0.0
+        except Exception as e:
+            c.print(f"[red]Failed to connect to Alpaca:[/red] {e}")
+            raise typer.Exit(1)
+        
+        # Get investor report
+        path_sheet = default_nav_sheet_path()
+        path_inv = default_investor_flows_path()
+        
+        try:
+            rep = investor_report(nav_sheet_path=path_sheet, investor_flows_path=path_inv)
+        except Exception:
+            rep = {}
+        
+        # NAV header
+        nav_per_unit = float(rep.get("nav_per_unit") or 1.0)
+        total_units = float(rep.get("total_units") or 0.0)
+        asof = rep.get("asof") or "—"
+        
+        c.print(Panel(
+            f"[bold]Live Equity:[/bold] ${equity:,.2f}\n"
+            f"[bold]Cash:[/bold] ${cash:,.2f}\n"
+            f"[bold]NAV/Unit:[/bold] {nav_per_unit:.4f}\n"
+            f"[bold]Last Snapshot:[/bold] {str(asof)[:19]}",
+            title="NAV Summary",
+            expand=False,
+        ))
+        
+        # Investor table
+        rows = rep.get("rows") or []
+        if not rows:
+            c.print(Panel(
+                "No investors yet.\n"
+                "Seed with: lox nav investor seed 'JL:1000,TG:500'",
+                title="Investors",
+                expand=False,
+            ))
+            return
+        
+        tbl = Table(title="Investor Ownership")
+        tbl.add_column("Investor", style="bold cyan")
+        tbl.add_column("Ownership", justify="right")
+        tbl.add_column("Value", justify="right", style="green")
+        tbl.add_column("Basis", justify="right")
+        tbl.add_column("P&L", justify="right")
+        tbl.add_column("Return", justify="right")
+        
+        for r in rows:
+            own = r.get("ownership")
+            ret = r.get("return")
+            pnl = float(r.get("pnl") or 0.0)
+            pnl_style = "green" if pnl >= 0 else "red"
+            
+            tbl.add_row(
+                str(r.get("code") or ""),
+                "—" if own is None else f"{float(own)*100:.1f}%",
+                f"${float(r.get('value') or 0.0):,.2f}",
+                f"${float(r.get('basis') or 0.0):,.2f}",
+                f"[{pnl_style}]${pnl:+,.2f}[/{pnl_style}]",
+                "—" if ret is None else f"{float(ret)*100:+.1f}%",
+            )
+        
+        c.print(tbl)
+        
+        # Quick commands hint
+        c.print(Panel(
+            "[dim]Quick commands:[/dim]\n"
+            "  lox nav snapshot              # Record NAV point\n"
+            "  lox nav investor contribute JL 500  # Add investment\n"
+            "  lox nav investor report       # Detailed report",
+            expand=False,
+        ))
 
     @nav_app.command("flow")
     def nav_flow(
