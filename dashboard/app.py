@@ -462,8 +462,59 @@ def fetch_economic_calendar(days_back=3, days_ahead=7):
         return [], []
 
 
+def fetch_earnings_history(symbol, api_key, num_quarters=4):
+    """Fetch historical earnings surprises for a ticker from FMP."""
+    try:
+        import requests
+        url = f"https://financialmodelingprep.com/api/v3/earnings-surprises/{symbol}"
+        resp = requests.get(url, params={"apikey": api_key}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if not isinstance(data, list) or not data:
+            return None
+        
+        # Get last N quarters
+        recent = data[:num_quarters]
+        
+        beats = 0
+        misses = 0
+        meets = 0
+        
+        for q in recent:
+            actual = q.get("actualEarningResult")
+            estimate = q.get("estimatedEarning")
+            if actual is not None and estimate is not None:
+                try:
+                    diff = float(actual) - float(estimate)
+                    if diff > 0.01:
+                        beats += 1
+                    elif diff < -0.01:
+                        misses += 1
+                    else:
+                        meets += 1
+                except:
+                    pass
+        
+        total = beats + misses + meets
+        if total == 0:
+            return None
+        
+        return {
+            "beats": beats,
+            "misses": misses,
+            "meets": meets,
+            "total": total,
+            "beat_rate": round(beats / total * 100),
+            "miss_rate": round(misses / total * 100),
+        }
+    except Exception as e:
+        print(f"Earnings history fetch error for {symbol}: {e}")
+        return None
+
+
 def fetch_earnings_calendar(tickers, days_ahead=14):
-    """Fetch upcoming earnings for specified tickers from FMP."""
+    """Fetch upcoming earnings for specified tickers from FMP with historical beat/miss data."""
     try:
         settings = load_settings()
         if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
@@ -513,17 +564,21 @@ def fetch_earnings_calendar(tickers, days_ahead=14):
         if not isinstance(earnings, list):
             return []
         
-        # Filter for our tickers
+        # Filter for our tickers and enrich with historical data
         relevant_earnings = []
         for e in earnings:
             symbol = e.get("symbol", "").upper()
             if symbol in [t.upper() for t in all_tickers]:
+                # Get historical beat/miss data
+                history = fetch_earnings_history(symbol, settings.FMP_API_KEY, num_quarters=4)
+                
                 relevant_earnings.append({
                     "date": e.get("date", ""),
                     "symbol": symbol,
                     "time": e.get("time", ""),  # "bmo" (before market open) or "amc" (after market close)
                     "eps_estimate": e.get("epsEstimated"),
                     "revenue_estimate": e.get("revenueEstimated"),
+                    "history": history,  # Beat/miss history
                 })
         
         # Sort by date
@@ -625,13 +680,24 @@ def _generate_palmer_analysis():
         
         calendar_text = "\n".join(calendar_lines)
         
-        # Format earnings for our holdings (next 2 weeks)
+        # Format earnings for our holdings (next 2 weeks) with history
         earnings_lines = []
         if upcoming_earnings:
             for e in upcoming_earnings[:4]:
                 time_str = "BMO" if e.get("time") == "bmo" else "AMC" if e.get("time") == "amc" else ""
-                eps_str = f"EPS est: {e.get('eps_estimate')}" if e.get('eps_estimate') else ""
-                earnings_lines.append(f"  {e['date']} {time_str} | {e['symbol']} {eps_str}")
+                
+                # EPS estimate
+                eps_str = ""
+                if e.get('eps_estimate'):
+                    eps_str = f"EPS est: ${e['eps_estimate']:.2f}"
+                
+                # Historical beat/miss rate
+                history_str = ""
+                hist = e.get('history')
+                if hist:
+                    history_str = f" | Last 4Q: {hist['beats']} beats, {hist['misses']} misses ({hist['beat_rate']}% beat rate)"
+                
+                earnings_lines.append(f"  {e['date']} {time_str} | {e['symbol']} {eps_str}{history_str}")
         earnings_text = "\n".join(earnings_lines) if earnings_lines else "  None in next 14 days"
         
         try:
@@ -683,7 +749,7 @@ Recent: [Analyze any releases from last 3 days - results, surprises, market reac
 Upcoming: [Key events in next 5 days and positioning implications]
 
 EARNINGS RISK
-[IMPORTANT: We own PUTS on TAN/NVDA/HYG so we WANT those stocks to DROP. Earnings MISS = good for our puts. Earnings BEAT = bad for our puts. Get this right!]
+[Analyze each upcoming earnings using the EPS estimates and historical beat/miss rates provided. For our PUTS (TAN/NVDA/HYG): MISS = good, BEAT = bad. Note if a company tends to beat/miss consistently.]
 
 SCENARIO WATCH
 [Top 3 scenarios by probability, adjusted for recent data]
