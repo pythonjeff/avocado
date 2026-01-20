@@ -73,8 +73,10 @@ def register(app: typer.Typer) -> None:
             trade = {
                 'qty': filled_qty,
                 'price': price,
-                'date': str(filled_at)[:10] if filled_at else '?',
-                'value': filled_qty * price * mult
+                'date': filled_at,  # Keep full datetime for FIFO sorting
+                'date_str': str(filled_at)[:10] if filled_at else '?',
+                'value': filled_qty * price * mult,
+                'mult': mult
             }
             
             if side == 'buy':
@@ -82,44 +84,86 @@ def register(app: typer.Typer) -> None:
             else:
                 trades_by_symbol[sym]['sells'].append(trade)
         
-        # Calculate closed trades
+        # Calculate closed trades using FIFO matching
         closed_trades = []
         
         for sym, data in trades_by_symbol.items():
-            buys = data['buys']
-            sells = data['sells']
-            
-            total_bought_qty = sum(b['qty'] for b in buys)
-            total_sold_qty = sum(s['qty'] for s in sells)
-            total_bought_value = sum(b['value'] for b in buys)
-            total_sold_value = sum(s['value'] for s in sells)
+            # Sort by date (oldest first) for FIFO
+            buys = sorted(data['buys'], key=lambda x: x['date'] or datetime.min)
+            sells = sorted(data['sells'], key=lambda x: x['date'] or datetime.min)
             
             display_sym, is_option = _parse_option_symbol(sym)
             
-            # Only include if we have both buys and sells (round trip)
-            if total_bought_qty > 0 and total_sold_qty > 0:
-                # Calculate P&L
-                if total_bought_qty == total_sold_qty:
-                    realized_pnl = total_sold_value - total_bought_value
-                    fully_closed = True
-                else:
-                    # Partial close - prorate
-                    closed_qty = min(total_bought_qty, total_sold_qty)
-                    close_ratio = closed_qty / max(total_bought_qty, total_sold_qty)
-                    realized_pnl = (total_sold_value - total_bought_value) * close_ratio
-                    fully_closed = False
+            # FIFO matching: match each sell with the oldest available buy that came BEFORE it
+            total_cost = 0.0
+            total_proceeds = 0.0
+            closed_qty_total = 0.0
+            matched_buys = []
+            matched_sells = []
+            
+            buy_queue = []  # Queue of [remaining_qty, price, mult, date, original_trade]
+            for b in buys:
+                buy_queue.append([b['qty'], b['price'], b['mult'], b['date'], b])
+            
+            for sell in sells:
+                sell_qty_remaining = sell['qty']
+                sell_date = sell['date']
+                
+                while sell_qty_remaining > 0 and buy_queue:
+                    # Find first buy that came BEFORE this sell
+                    buy_idx = None
+                    for i, (bq, bp, bm, bd, bt) in enumerate(buy_queue):
+                        if bq > 0 and (bd is None or sell_date is None or bd <= sell_date):
+                            buy_idx = i
+                            break
+                    
+                    if buy_idx is None:
+                        # No matching buy found (sell came before any remaining buys)
+                        break
+                    
+                    buy_remaining, buy_price, buy_mult, buy_date, buy_trade = buy_queue[buy_idx]
+                    match_qty = min(sell_qty_remaining, buy_remaining)
+                    
+                    # Calculate P&L for this match
+                    cost = match_qty * buy_price * buy_mult
+                    proceeds = match_qty * sell['price'] * sell['mult']
+                    
+                    total_cost += cost
+                    total_proceeds += proceeds
+                    closed_qty_total += match_qty
+                    
+                    # Track matched trades for details view
+                    if buy_trade not in matched_buys:
+                        matched_buys.append(buy_trade)
+                    if sell not in matched_sells:
+                        matched_sells.append(sell)
+                    
+                    # Update remaining quantities
+                    buy_queue[buy_idx][0] -= match_qty
+                    sell_qty_remaining -= match_qty
+                    
+                    # Remove exhausted buys
+                    if buy_queue[buy_idx][0] <= 0.001:
+                        buy_queue.pop(buy_idx)
+            
+            # Only include if we matched something
+            if closed_qty_total > 0.001:
+                realized_pnl = total_proceeds - total_cost
+                # Check if any buys remain unmatched
+                remaining_buy_qty = sum(b[0] for b in buy_queue)
+                fully_closed = remaining_buy_qty < 0.001  # Floating point tolerance
                 
                 closed_trades.append({
                     'symbol': display_sym,
                     'raw_sym': sym,
                     'is_option': is_option,
-                    'bought_qty': total_bought_qty,
-                    'sold_qty': total_sold_qty,
-                    'cost': total_bought_value,
-                    'proceeds': total_sold_value,
+                    'bought_qty': closed_qty_total + remaining_buy_qty,
+                    'sold_qty': closed_qty_total,
+                    'cost': total_cost,
+                    'proceeds': total_proceeds,
                     'pnl': realized_pnl,
-                    'buys': buys,
-                    'sells': sells,
+                    'buys': matched_buys,
+                    'sells': matched_sells,
                     'fully_closed': fully_closed
                 })
         
@@ -193,14 +237,16 @@ def register(app: typer.Typer) -> None:
                 console.print(f"[cyan]{t['symbol']}[/cyan]")
                 
                 # Show buys
-                for b in sorted(t['buys'], key=lambda x: x['date']):
+                for b in sorted(t['buys'], key=lambda x: x['date'] or datetime.min):
                     qty_str = f"{b['qty']:.2f}" if b['qty'] % 1 else f"{b['qty']:.0f}"
-                    console.print(f"  {b['date']} | [green]BUY [/green] {qty_str} @ ${b['price']:.2f} = ${b['value']:,.2f}")
+                    date_str = b.get('date_str') or str(b['date'])[:10] if b['date'] else '?'
+                    console.print(f"  {date_str} | [green]BUY [/green] {qty_str} @ ${b['price']:.2f} = ${b['value']:,.2f}")
                 
                 # Show sells
-                for s in sorted(t['sells'], key=lambda x: x['date']):
+                for s in sorted(t['sells'], key=lambda x: x['date'] or datetime.min):
                     qty_str = f"{s['qty']:.2f}" if s['qty'] % 1 else f"{s['qty']:.0f}"
-                    console.print(f"  {s['date']} | [red]SELL[/red] {qty_str} @ ${s['price']:.2f} = ${s['value']:,.2f}")
+                    date_str = s.get('date_str') or str(s['date'])[:10] if s['date'] else '?'
+                    console.print(f"  {date_str} | [red]SELL[/red] {qty_str} @ ${s['price']:.2f} = ${s['value']:,.2f}")
                 
                 console.print(f"  [{pnl_style}]→ Realized: ${t['pnl']:+,.2f}[/{pnl_style}]")
 

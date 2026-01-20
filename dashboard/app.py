@@ -489,7 +489,7 @@ def api_closed_trades():
 
 
 def get_closed_trades_data():
-    """Fetch closed trades and calculate realized P&L."""
+    """Fetch closed trades and calculate realized P&L using FIFO matching."""
     from collections import defaultdict
     
     try:
@@ -536,8 +536,10 @@ def get_closed_trades_data():
         trade = {
             'qty': filled_qty,
             'price': price,
-            'date': str(filled_at)[:10] if filled_at else '?',
-            'value': filled_qty * price * mult
+            'date': filled_at,  # Keep full datetime for sorting
+            'date_str': str(filled_at)[:10] if filled_at else '?',
+            'value': filled_qty * price * mult,
+            'mult': mult
         }
         
         if side == 'buy':
@@ -545,35 +547,71 @@ def get_closed_trades_data():
         else:
             trades_by_symbol[sym]['sells'].append(trade)
     
-    # Calculate closed trades
+    # Calculate closed trades using FIFO matching
     closed_trades = []
     
     for sym, data in trades_by_symbol.items():
-        buys = data['buys']
-        sells = data['sells']
-        
-        total_bought_qty = sum(b['qty'] for b in buys)
-        total_sold_qty = sum(s['qty'] for s in sells)
-        total_bought_value = sum(b['value'] for b in buys)
-        total_sold_value = sum(s['value'] for s in sells)
+        # Sort by date (oldest first) for FIFO
+        buys = sorted(data['buys'], key=lambda x: x['date'] or '0')
+        sells = sorted(data['sells'], key=lambda x: x['date'] or '0')
         
         display_sym = _parse_option_symbol_display(sym)
         
-        # Only include if we have both buys and sells (round trip)
-        if total_bought_qty > 0 and total_sold_qty > 0:
-            if total_bought_qty == total_sold_qty:
-                realized_pnl = total_sold_value - total_bought_value
-                fully_closed = True
-            else:
-                closed_qty = min(total_bought_qty, total_sold_qty)
-                close_ratio = closed_qty / max(total_bought_qty, total_sold_qty)
-                realized_pnl = (total_sold_value - total_bought_value) * close_ratio
-                fully_closed = False
+        # FIFO matching: match each sell with the oldest available buy that came BEFORE it
+        total_cost = 0.0
+        total_proceeds = 0.0
+        closed_qty = 0.0
+        
+        buy_queue = []  # Queue of (remaining_qty, price_per_unit, mult, date)
+        for b in buys:
+            buy_queue.append([b['qty'], b['price'], b['mult'], b['date']])
+        
+        for sell in sells:
+            sell_qty_remaining = sell['qty']
+            sell_date = sell['date']
+            
+            while sell_qty_remaining > 0 and buy_queue:
+                # Find first buy that came BEFORE this sell
+                buy_idx = None
+                for i, (bq, bp, bm, bd) in enumerate(buy_queue):
+                    if bq > 0 and (bd is None or sell_date is None or bd <= sell_date):
+                        buy_idx = i
+                        break
+                
+                if buy_idx is None:
+                    # No matching buy found (sell came before any remaining buys)
+                    break
+                
+                buy_remaining, buy_price, buy_mult, buy_date = buy_queue[buy_idx]
+                match_qty = min(sell_qty_remaining, buy_remaining)
+                
+                # Calculate P&L for this match
+                cost = match_qty * buy_price * buy_mult
+                proceeds = match_qty * sell['price'] * sell['mult']
+                
+                total_cost += cost
+                total_proceeds += proceeds
+                closed_qty += match_qty
+                
+                # Update remaining quantities
+                buy_queue[buy_idx][0] -= match_qty
+                sell_qty_remaining -= match_qty
+                
+                # Remove exhausted buys
+                if buy_queue[buy_idx][0] <= 0:
+                    buy_queue.pop(buy_idx)
+        
+        # Only include if we matched something
+        if closed_qty > 0:
+            realized_pnl = total_proceeds - total_cost
+            # Check if any buys remain unmatched
+            remaining_buy_qty = sum(b[0] for b in buy_queue)
+            fully_closed = remaining_buy_qty < 0.001  # Floating point tolerance
             
             closed_trades.append({
                 'symbol': display_sym,
-                'cost': total_bought_value,
-                'proceeds': total_sold_value,
+                'cost': total_cost,
+                'proceeds': total_proceeds,
                 'pnl': realized_pnl,
                 'fully_closed': fully_closed
             })
