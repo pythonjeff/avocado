@@ -622,8 +622,29 @@ def _generate_palmer_analysis():
         else:
             upcoming_text = "  No upcoming events in next 14 days"
         
-        # Identify the NEXT key catalyst
-        key_events = ["CPI", "PPI", "NFP", "Nonfarm", "FOMC", "Fed", "GDP", "PCE", "Retail Sales", "Jobless", "ISM"]
+        # Identify key economic events
+        key_events = ["CPI", "PPI", "NFP", "Nonfarm", "FOMC", "Fed", "GDP", "PCE", "Retail Sales", "Jobless", "ISM", "Employment", "Payroll"]
+        
+        # Find the PREVIOUS key catalyst (most recent release that was important)
+        prev_catalyst = None
+        for r in recent_releases:
+            event_name = r.get("event", "")
+            if any(key in event_name for key in key_events):
+                prev_catalyst = r
+                break
+        
+        prev_catalyst_text = ""
+        if prev_catalyst:
+            surprise_str = ""
+            if prev_catalyst.get("surprise") is not None:
+                s = prev_catalyst["surprise"]
+                if abs(s) > 0.01:
+                    surprise_str = f" | SURPRISE: {'+' if s > 0 else ''}{s:.2f}"
+            prev_catalyst_text = f"\n\nPREVIOUS KEY CATALYST: {prev_catalyst['date']} - {prev_catalyst['event']}\n  Result: {prev_catalyst['actual']} (est: {prev_catalyst.get('estimate', 'n/a')}, prev: {prev_catalyst.get('previous', 'n/a')}){surprise_str}"
+        else:
+            prev_catalyst_text = "\n\nPREVIOUS KEY CATALYST: None in last 5 days"
+        
+        # Find the NEXT key catalyst
         next_catalyst = None
         for u in upcoming_events:
             event_name = u.get("event", "")
@@ -631,9 +652,9 @@ def _generate_palmer_analysis():
                 next_catalyst = u
                 break
         
-        catalyst_text = ""
+        next_catalyst_text = ""
         if next_catalyst:
-            catalyst_text = f"\n\nNEXT KEY CATALYST: {next_catalyst['date']} - {next_catalyst['event']} (est: {next_catalyst.get('estimate', 'n/a')}, prev: {next_catalyst.get('previous', 'n/a')})"
+            next_catalyst_text = f"\n\nNEXT KEY CATALYST: {next_catalyst['date']} - {next_catalyst['event']} (est: {next_catalyst.get('estimate', 'n/a')}, prev: {next_catalyst.get('previous', 'n/a')})"
         
         # Format earnings for our holdings
         earnings_text = ""
@@ -684,7 +705,7 @@ RECENT ECONOMIC RELEASES (last 5 days):
 {releases_text}
 
 UPCOMING EVENTS (next 14 days):
-{upcoming_text}{catalyst_text}
+{upcoming_text}{prev_catalyst_text}{next_catalyst_text}
 
 UPCOMING EARNINGS FOR OUR HOLDINGS (next 14 days):
 {earnings_text}
@@ -710,6 +731,14 @@ TASK: Provide your assessment with these sections:
 
 **REGIME STATUS** (2-3 lines)
 Current regime classification and confidence level.
+
+**PREVIOUS CATALYST & RESULTS**
+Analyze the most recent key economic release:
+- What was the result vs expectations?
+- How did markets react? Was it priced in?
+- Did it shift regime probabilities?
+- Any implications for our positions?
+If no recent catalyst, say "No major releases recently" and note what we're waiting for.
 
 {data_instruction}
 
