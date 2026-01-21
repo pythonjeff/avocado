@@ -266,11 +266,45 @@ def get_10y_yield():
         return None
 
 
+def _fetch_option_quote(data_client, symbol: str) -> dict:
+    """Fetch bid/ask quote for an option. Returns {'bid': float, 'ask': float} or None."""
+    try:
+        from alpaca.data.requests import OptionLatestQuoteRequest
+        req = OptionLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quotes = data_client.get_option_latest_quote(req)
+        if quotes and symbol in quotes:
+            q = quotes[symbol]
+            return {
+                "bid": float(getattr(q, 'bid_price', 0) or 0),
+                "ask": float(getattr(q, 'ask_price', 0) or 0),
+            }
+    except Exception as e:
+        print(f"[Quote] Option quote fetch error for {symbol}: {e}")
+    return None
+
+
+def _fetch_stock_quote(data_client, symbol: str) -> dict:
+    """Fetch bid/ask quote for a stock/ETF. Returns {'bid': float, 'ask': float} or None."""
+    try:
+        from alpaca.data.requests import StockLatestQuoteRequest
+        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        quotes = data_client.get_stock_latest_quote(req)
+        if quotes and symbol in quotes:
+            q = quotes[symbol]
+            return {
+                "bid": float(getattr(q, 'bid_price', 0) or 0),
+                "ask": float(getattr(q, 'ask_price', 0) or 0),
+            }
+    except Exception as e:
+        print(f"[Quote] Stock quote fetch error for {symbol}: {e}")
+    return None
+
+
 def get_positions_data():
-    """Fetch positions and calculate P&L."""
+    """Fetch positions and calculate P&L using conservative bid/ask marking."""
     try:
         settings = load_settings()
-        trading, _ = make_clients(settings)
+        trading, data_client = make_clients(settings)
         account = trading.get_account()
         positions = trading.get_all_positions()
         
@@ -307,9 +341,9 @@ def get_positions_data():
         total_pnl = nav_equity - original_capital
         
         positions_list = []
-        total_value = 0.0
+        total_liquidation_value = 0.0
         
-        # Process positions with error handling
+        # Process positions with conservative bid/ask marking
         for p in positions:
             try:
                 symbol = str(getattr(p, "symbol", "") or "")
@@ -317,7 +351,7 @@ def get_positions_data():
                     continue
                     
                 qty = float(getattr(p, "qty", 0.0) or 0.0)
-                mv = float(getattr(p, "market_value", 0.0) or 0.0)
+                mv = float(getattr(p, "market_value", 0.0) or 0.0)  # Alpaca's mid-market mark
                 avg_entry = float(getattr(p, "avg_entry_price", 0.0) or 0.0)
                 current_price = float(getattr(p, "current_price", 0.0) or 0.0)
                 
@@ -366,27 +400,47 @@ def get_positions_data():
                     # Skip option parsing errors, continue with symbol only
                     pass
                 
-                # Calculate position-level P&L
-                if opt_info:
-                    # For options, P&L is based on price change * 100 * qty
-                    entry_cost = avg_entry * 100 * abs(qty) if avg_entry > 0 else 0
-                    current_value = abs(mv)
-                    pnl = current_value - entry_cost if qty > 0 else entry_cost - current_value
-                else:
-                    # For stocks/ETFs
-                    entry_cost = avg_entry * abs(qty) if avg_entry > 0 else 0
-                    pnl = mv - entry_cost
+                # Fetch real bid/ask quote for conservative marking
+                quote = None
+                liquidation_price = current_price  # Fallback to Alpaca's price
                 
-                total_value += abs(mv)
+                if opt_info:
+                    # Option position - fetch option quote
+                    quote = _fetch_option_quote(data_client, symbol)
+                    multiplier = 100
+                else:
+                    # Stock/ETF position - fetch stock quote  
+                    quote = _fetch_stock_quote(data_client, symbol)
+                    multiplier = 1
+                
+                # Conservative mark: longs at bid, shorts at ask
+                if quote:
+                    if qty > 0:  # Long position - mark at bid (what we'd get selling)
+                        liquidation_price = quote["bid"] if quote["bid"] > 0 else current_price
+                    else:  # Short position - mark at ask (what we'd pay to cover)
+                        liquidation_price = quote["ask"] if quote["ask"] > 0 else current_price
+                
+                # Calculate liquidation value and P&L
+                if opt_info:
+                    entry_cost = avg_entry * multiplier * abs(qty) if avg_entry > 0 else 0
+                    liquidation_value = liquidation_price * multiplier * abs(qty)
+                    pnl = liquidation_value - entry_cost if qty > 0 else entry_cost - liquidation_value
+                else:
+                    entry_cost = avg_entry * abs(qty) if avg_entry > 0 else 0
+                    liquidation_value = liquidation_price * abs(qty) if qty > 0 else liquidation_price * abs(qty)
+                    pnl = liquidation_value - entry_cost if qty > 0 else entry_cost - liquidation_value
+                
+                total_liquidation_value += liquidation_value
                 
                 positions_list.append({
                     "symbol": symbol,
                     "qty": qty,
-                    "market_value": mv,
+                    "market_value": liquidation_value,  # Now using liquidation value
                     "pnl": pnl,
                     "pnl_pct": (pnl / entry_cost * 100) if entry_cost > 0 else 0.0,
-                    "current_price": current_price,
+                    "current_price": liquidation_price,  # Show liquidation price
                     "opt_info": opt_info,
+                    "bid_ask_mark": True,  # Flag that this is conservatively marked
                 })
             except Exception as pos_err:
                 print(f"Warning: Error processing position: {pos_err}")
@@ -394,15 +448,6 @@ def get_positions_data():
         
         # Sort by P&L (most profitable to least profitable)
         positions_list.sort(key=lambda x: x["pnl"], reverse=True)
-        
-        # Calculate return percentage
-        return_pct = (total_pnl / original_capital * 100) if original_capital > 0 else 0.0
-        
-        # Get benchmark performance since inception for comparison
-        sp500_return = get_sp500_return_since_inception()
-        btc_return = get_btc_return_since_inception()
-        alpha_sp500 = return_pct - sp500_return if sp500_return is not None else None
-        alpha_btc = return_pct - btc_return if btc_return is not None else None
         
         # Get cash available from account
         cash_available = 0.0
@@ -412,11 +457,26 @@ def get_positions_data():
         except Exception:
             pass
         
+        # Calculate Liquidation NAV = Cash + Liquidation Value of Positions
+        liquidation_nav = cash_available + total_liquidation_value
+        
+        # Total P&L based on liquidation value (conservative)
+        liquidation_pnl = liquidation_nav - original_capital
+        
+        # Calculate return percentage based on liquidation
+        return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
+        
+        # Get benchmark performance since inception for comparison
+        sp500_return = get_sp500_return_since_inception()
+        btc_return = get_btc_return_since_inception()
+        alpha_sp500 = return_pct - sp500_return if sp500_return is not None else None
+        alpha_btc = return_pct - btc_return if btc_return is not None else None
+        
         return {
             "positions": positions_list,
-            "total_pnl": total_pnl,
-            "total_value": total_value,
-            "nav_equity": nav_equity,
+            "total_pnl": liquidation_pnl,  # Conservative P&L at bid/ask
+            "total_value": total_liquidation_value,
+            "nav_equity": liquidation_nav,  # Liquidation NAV
             "original_capital": original_capital,
             "return_pct": return_pct,
             "sp500_return": sp500_return,
@@ -425,6 +485,7 @@ def get_positions_data():
             "alpha_btc": alpha_btc,
             "cash_available": cash_available,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "mark_type": "liquidation",  # Flag that this is bid/ask marked
         }
     except Exception as e:
         import traceback

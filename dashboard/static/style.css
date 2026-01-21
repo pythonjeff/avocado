@@ -179,6 +179,20 @@ body {
     font-weight: 600;
 }
 
+.mark-tooltip {
+    display: inline-block;
+    margin-left: 4px;
+    font-size: 10px;
+    color: var(--accent-blue);
+    cursor: help;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+}
+
+.mark-tooltip:hover {
+    opacity: 1;
+}
+
 .summary-value {
     font-size: 32px;
     font-weight: 700;
