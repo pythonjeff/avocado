@@ -18,7 +18,14 @@
                 <span class="logo-fund">FUND</span>
                 <div class="logo-underline"></div>
             </div>
-            <div class="header-subtitle">Portfolio Dashboard • Updates every 5 minutes</div>
+            <div class="header-subtitle">Portfolio Dashboard</div>
+            
+            <!-- Regime Change Alert (hidden by default) -->
+            <div class="regime-alert" id="regime-alert" style="display: none;">
+                <span class="alert-icon">⚡</span>
+                <span class="alert-text" id="alert-text">Regime shift detected</span>
+                <button class="alert-dismiss" onclick="dismissAlert()">×</button>
+            </div>
         </header>
 
         <!-- Summary Panel -->

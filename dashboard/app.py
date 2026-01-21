@@ -37,6 +37,10 @@ PALMER_CACHE = {
     "regime_snapshot": None,
     "timestamp": None,
     "last_refresh": None,
+    "traffic_lights": None,
+    "prev_traffic_lights": None,  # For change detection
+    "regime_changed": False,
+    "regime_change_details": None,
 }
 PALMER_CACHE_LOCK = threading.Lock()
 PALMER_REFRESH_INTERVAL = 30 * 60  # 30 minutes in seconds
@@ -1186,6 +1190,36 @@ Be direct and specific. No fluff. Under 75 words total."""
     }
 
 
+def _detect_regime_change(old_lights, new_lights):
+    """Detect if any traffic light changed color."""
+    if not old_lights or not new_lights:
+        return False, None
+    
+    changes = []
+    for key in ["regime", "volatility", "credit", "rates"]:
+        old_color = old_lights.get(key, {}).get("color") if old_lights.get(key) else None
+        new_color = new_lights.get(key, {}).get("color") if new_lights.get(key) else None
+        old_label = old_lights.get(key, {}).get("label") if old_lights.get(key) else None
+        new_label = new_lights.get(key, {}).get("label") if new_lights.get(key) else None
+        
+        if old_color and new_color and old_color != new_color:
+            # Determine direction of change
+            severity_order = {"green": 0, "yellow": 1, "red": 2}
+            old_sev = severity_order.get(old_color, 0)
+            new_sev = severity_order.get(new_color, 0)
+            direction = "worsening" if new_sev > old_sev else "improving"
+            changes.append({
+                "indicator": key.upper(),
+                "from": old_label,
+                "to": new_label,
+                "direction": direction,
+            })
+    
+    if changes:
+        return True, changes
+    return False, None
+
+
 def _refresh_palmer_cache():
     """Refresh Palmer's cached analysis."""
     global PALMER_CACHE
@@ -1193,14 +1227,31 @@ def _refresh_palmer_cache():
     try:
         result = _generate_palmer_analysis()
         with PALMER_CACHE_LOCK:
+            # Detect regime changes before updating
+            old_lights = PALMER_CACHE.get("traffic_lights")
+            new_lights = result.get("traffic_lights")
+            changed, change_details = _detect_regime_change(old_lights, new_lights)
+            
+            # Store previous state
+            PALMER_CACHE["prev_traffic_lights"] = old_lights
+            
+            # Update cache
             PALMER_CACHE["analysis"] = result.get("analysis")
             PALMER_CACHE["regime_snapshot"] = result.get("regime_snapshot")
-            PALMER_CACHE["traffic_lights"] = result.get("traffic_lights")
+            PALMER_CACHE["traffic_lights"] = new_lights
             PALMER_CACHE["events"] = result.get("events")
             PALMER_CACHE["headlines"] = result.get("headlines")
             PALMER_CACHE["timestamp"] = result.get("timestamp")
             PALMER_CACHE["last_refresh"] = datetime.now(timezone.utc)
             PALMER_CACHE["error"] = result.get("error")
+            
+            # Track regime change
+            PALMER_CACHE["regime_changed"] = changed
+            PALMER_CACHE["regime_change_details"] = change_details
+            
+            if changed:
+                print(f"[Palmer] ⚡ REGIME CHANGE DETECTED: {change_details}")
+        
         print(f"[Palmer] Cache refreshed successfully")
     except Exception as e:
         import traceback
@@ -1237,8 +1288,8 @@ def api_regime_analysis():
             "events": PALMER_CACHE.get("events"),
             "headlines": PALMER_CACHE.get("headlines"),
             "timestamp": PALMER_CACHE.get("timestamp"),
-            "cached": True,
-            "next_refresh": (PALMER_CACHE["last_refresh"] + timedelta(seconds=PALMER_REFRESH_INTERVAL)).isoformat() if PALMER_CACHE.get("last_refresh") else None,
+            "regime_changed": PALMER_CACHE.get("regime_changed", False),
+            "regime_change_details": PALMER_CACHE.get("regime_change_details"),
             "error": PALMER_CACHE.get("error"),
         })
 

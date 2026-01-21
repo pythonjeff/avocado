@@ -1,5 +1,30 @@
 // LOX FUND Dashboard v1
 
+// Track dismissed alerts (per session)
+let dismissedAlertTimestamp = null;
+
+function dismissAlert() {
+    const alert = document.getElementById('regime-alert');
+    if (alert) {
+        alert.style.display = 'none';
+        dismissedAlertTimestamp = new Date().toISOString();
+    }
+}
+
+function showRegimeAlert(details) {
+    const alert = document.getElementById('regime-alert');
+    const alertText = document.getElementById('alert-text');
+    
+    if (!alert || !alertText || !details || details.length === 0) return;
+    
+    // Build alert message
+    const change = details[0]; // Show first/most important change
+    const direction = change.direction === 'worsening' ? '↗' : '↘';
+    alertText.textContent = `${change.indicator} shifted: ${change.from} → ${change.to}`;
+    
+    alert.style.display = 'flex';
+}
+
 function formatCurrency(value, showCents = false) {
     // Show cents for smaller values or when explicitly requested
     const decimals = (showCents || Math.abs(value) < 100) ? 2 : 0;
@@ -246,6 +271,14 @@ function fetchPalmerDashboard() {
                 // Retry in 10 seconds
                 setTimeout(fetchPalmerDashboard, 10000);
                 return;
+            }
+            
+            // Check for regime changes
+            if (data.regime_changed && data.regime_change_details) {
+                // Only show if not already dismissed this session
+                if (!dismissedAlertTimestamp || new Date(data.timestamp) > new Date(dismissedAlertTimestamp)) {
+                    showRegimeAlert(data.regime_change_details);
+                }
             }
             
             // Update footer timestamp
