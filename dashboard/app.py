@@ -894,6 +894,7 @@ def fetch_macro_headlines(settings, portfolio_tickers=None, limit=5):
     
     Uses portfolio tickers if provided, otherwise defaults to macro ETFs.
     """
+    import requests
     headlines = []
     
     try:
