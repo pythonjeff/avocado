@@ -916,16 +916,18 @@ tbody tr:hover {
 .palmer-headlines {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 4px;
 }
 
 .headline-item {
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
+    padding: 10px 12px;
+    margin: 0 -12px;
+    border-radius: 6px;
+    transition: background-color 0.15s;
 }
 
-.headline-item:last-child {
-    border-bottom: none;
+.headline-item:hover {
+    background-color: rgba(0, 102, 255, 0.04);
 }
 
 .headline-text {
@@ -936,6 +938,20 @@ tbody tr:hover {
     margin-bottom: 4px;
 }
 
+.headline-link {
+    color: var(--text-primary);
+    text-decoration: none;
+    transition: color 0.15s ease;
+}
+
+.headline-link:hover {
+    color: var(--accent-blue);
+}
+
+.headline-item:hover .headline-link {
+    color: var(--accent-blue);
+}
+
 .headline-meta {
     font-size: 10px;
     color: var(--text-dim);
@@ -943,6 +959,17 @@ tbody tr:hover {
 
 .headline-source {
     font-weight: 600;
+}
+
+.read-more {
+    color: var(--accent-blue);
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.headline-item:hover .read-more {
+    opacity: 1;
 }
 
 .headline-ticker {
@@ -1096,3 +1123,4 @@ tbody tr:hover {
         gap: 12px;
     }
 }
+

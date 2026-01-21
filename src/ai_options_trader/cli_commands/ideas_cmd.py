@@ -81,7 +81,7 @@ def register(ideas_app: typer.Typer) -> None:
         universe = list(uni.basket_equity)
 
         obj = llm_event_trade_ideas_json(
-            settings=settings,
+                settings=settings,
             event_text=event_text,
             event_url=event_url,
             user_thesis=thesis_use,
@@ -261,7 +261,7 @@ def register(ideas_app: typer.Typer) -> None:
                     continue
                 resp = submit_equity_order(trading=trading, symbol=underlying, qty=int(qty), side="buy", limit_price=None, tif="day")
                 c.print(f"[green]Submitted[/green]: {resp}")
-            else:
+                else:
                 c.print(f"[yellow]Skip[/yellow] unsupported action: {action}")
                 continue
 
@@ -324,7 +324,7 @@ def register(ideas_app: typer.Typer) -> None:
         X: pd.DataFrame
         if cache and cache_path.exists() and not refresh_cache and not refresh:
             X = pd.read_csv(cache_path, parse_dates=["date"]).set_index("date")
-        else:
+                    else:
             X = build_regime_feature_matrix(settings=settings, start_date=start, refresh_fred=refresh)
             if cache:
                 X.reset_index().rename(columns={"index": "date"}).to_csv(cache_path, index=False)
@@ -397,9 +397,9 @@ def register(ideas_app: typer.Typer) -> None:
 
         for it in ideas:
             leg = legs.get(it.ticker)
-            if leg:
+                if leg:
                 expr = f"{leg['symbol']} (${leg['premium_usd']:.0f} Δ={leg.get('delta')})"
-            else:
+                else:
                 expr = "BUY SHARES" if it.direction == "bullish" else "PUT (n/a under $100)"
             tbl.add_row(
                 it.ticker,

@@ -246,19 +246,24 @@ function fetchPalmerDashboard() {
                 eventsContainer.innerHTML = '<div class="event-loading">No upcoming Fed/fiscal events</div>';
             }
             
-            // Update macro headlines
+            // Update macro headlines with clickable links
             if (data.headlines && data.headlines.length > 0) {
-                headlinesContainer.innerHTML = data.headlines.map(h => `
+                headlinesContainer.innerHTML = data.headlines.map(h => {
+                    const headlineContent = h.url 
+                        ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer" class="headline-link">${h.headline}</a>`
+                        : h.headline;
+                    return `
                     <div class="headline-item">
                         <div class="headline-text">
-                            ${h.ticker ? `<span class="headline-ticker">${h.ticker}</span> ` : ''}${h.headline}
+                            ${h.ticker ? `<span class="headline-ticker">${h.ticker}</span> ` : ''}${headlineContent}
                         </div>
                         <div class="headline-meta">
                             <span class="headline-source">${h.source || 'News'}</span>
                             ${h.time ? ` • ${h.time}` : ''}
+                            ${h.url ? ' • <span class="read-more">Read →</span>' : ''}
                         </div>
                     </div>
-                `).join('');
+                `}).join('');
             } else {
                 headlinesContainer.innerHTML = '<div class="headline-loading">No recent headlines</div>';
             }

@@ -915,6 +915,7 @@ def fetch_macro_headlines(settings, portfolio_tickers=None, limit=5):
                 site = item.get("site", "") or ""
                 published = item.get("publishedDate", "") or ""
                 ticker = item.get("symbol", "") or ""
+                url = item.get("url", "") or ""
                 
                 if title:
                     # Parse date for display
@@ -932,6 +933,7 @@ def fetch_macro_headlines(settings, portfolio_tickers=None, limit=5):
                         "source": site[:20] if site else "News",
                         "time": time_str,
                         "ticker": ticker,
+                        "url": url,
                     })
         
         # Dedupe by headline
