@@ -889,8 +889,8 @@ def fetch_macro_headlines(settings, limit=5):
         
         news_client = NewsClient(api_key=settings.alpaca_api_key, secret_key=settings.alpaca_api_secret)
         
-        # Macro-focused symbols
-        macro_symbols = ["SPY", "TLT", "GLD", "DXY", "VIX"]
+        # Alpaca expects comma-separated string for symbols
+        macro_symbols = "SPY,TLT,GLD"
         
         req = NewsRequest(
             symbols=macro_symbols,
