@@ -412,6 +412,14 @@ def get_positions_data():
         if yield_10y:
             macro_indicators.append(yield_10y)
         
+        # Get cash available from account
+        cash_available = 0.0
+        try:
+            if account:
+                cash_available = float(getattr(account, 'cash', 0.0) or 0.0)
+        except Exception:
+            pass
+        
         return {
             "positions": positions_list,
             "total_pnl": total_pnl,
@@ -423,6 +431,7 @@ def get_positions_data():
             "btc_return": btc_return,
             "alpha_sp500": alpha_sp500,
             "alpha_btc": alpha_btc,
+            "cash_available": cash_available,
             "macro_indicators": macro_indicators,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }

@@ -70,9 +70,9 @@ function updateDashboard() {
                 return;
             }
 
-            const updateEl = document.getElementById('last-update');
-            updateEl.textContent = formatTimestamp(data.timestamp);
-            updateEl.className = 'summary-value';
+            const cashEl = document.getElementById('cash-available');
+            cashEl.textContent = formatCurrency(data.cash_available || 0);
+            cashEl.className = 'summary-value';
 
             // Update performance comparison
             const fundReturnEl = document.getElementById('fund-return');
