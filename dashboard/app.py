@@ -1121,6 +1121,8 @@ def _generate_palmer_analysis():
             "headline": h["headline"],
             "source": h["source"],
             "time": h["time"],
+            "ticker": h.get("ticker", ""),
+            "url": h.get("url", ""),
         })
     
     # Generate LLM insight (just one focused paragraph)
