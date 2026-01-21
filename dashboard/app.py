@@ -1043,14 +1043,23 @@ def _generate_palmer_analysis():
             return "STABLE", "green"
     
     def get_rates_status(yield_val):
+        """
+        10Y context (post-2008 avg ~2%, pre-2008 ~4.5%):
+        - < 3.5%: LOW (dovish, unusual in current regime)
+        - 3.5-4.0%: MODERATE (transition zone)
+        - 4.0-4.5%: ELEVATED (restrictive, current zone)
+        - > 4.5%: HIGH (very restrictive, approaching 2023 peaks)
+        """
         if yield_val is None:
             return "UNKNOWN", "gray"
-        if yield_val > 4.8:
-            return "RESTRICTIVE", "red"
-        elif yield_val > 4.3:
+        if yield_val > 4.5:
+            return "HIGH", "red"
+        elif yield_val > 4.0:
             return "ELEVATED", "yellow"
+        elif yield_val > 3.5:
+            return "MODERATE", "green"
         else:
-            return "NORMAL", "green"
+            return "LOW", "green"
     
     vix_val = regime_snapshot.get("vix")
     hy_val = regime_snapshot.get("hy_oas_bps")
