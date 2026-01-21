@@ -63,87 +63,7 @@
             </div>
         </section>
 
-        <!-- Macro Indicators -->
-        <section class="macro-section">
-            <h2>Key Macro Indicators</h2>
-            <div class="macro-grid" id="macro-indicators">
-                <div class="macro-item">
-                    <div class="macro-label">Loading...</div>
-                    <div class="macro-value">—</div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Positions Table -->
-        <section class="positions-section">
-            <h2>Open Positions</h2>
-            <div class="table-container">
-                <table id="positions-table">
-                    <thead>
-                        <tr>
-                            <th>Symbol</th>
-                            <th>Quantity</th>
-                            <th>Market Value</th>
-                            <th>P&L</th>
-                            <th>P&L %</th>
-                        </tr>
-                    </thead>
-                    <tbody id="positions-body">
-                        <tr>
-                            <td colspan="5" class="loading">Loading positions...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <!-- Closed Trades -->
-        <section class="closed-trades-section">
-            <div class="closed-trades-header">
-                <h2>Closed Trades</h2>
-                <div class="win-rate-badge" id="win-rate-badge">
-                    <span class="win-rate-label">Win Rate</span>
-                    <span class="win-rate-value" id="win-rate-value">—</span>
-                </div>
-            </div>
-            
-            <!-- Summary Stats -->
-            <div class="closed-stats" id="closed-stats">
-                <div class="closed-stat">
-                    <span class="stat-label">Realized P&L</span>
-                    <span class="stat-value" id="realized-pnl">—</span>
-                </div>
-                <div class="closed-stat">
-                    <span class="stat-label">Wins</span>
-                    <span class="stat-value wins" id="total-wins">—</span>
-                </div>
-                <div class="closed-stat">
-                    <span class="stat-label">Losses</span>
-                    <span class="stat-value losses" id="total-losses">—</span>
-                </div>
-            </div>
-            
-            <!-- Closed Trades Table -->
-            <div class="table-container">
-                <table id="closed-trades-table">
-                    <thead>
-                        <tr>
-                            <th>Position</th>
-                            <th>Cost</th>
-                            <th>Proceeds</th>
-                            <th>P&L</th>
-                        </tr>
-                    </thead>
-                    <tbody id="closed-trades-body">
-                        <tr>
-                            <td colspan="4" class="loading">Loading closed trades...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <!-- Palmer: Macro Dashboard -->
+        <!-- Palmer: Macro Intelligence (MOVED UP) -->
         <section class="palmer-section">
             <div class="palmer-header">
                 <h2 class="palmer-name">PALMER</h2>
@@ -174,32 +94,97 @@
                 </div>
             </div>
             
-            <!-- Two Column Layout: Events + Headlines -->
-            <div class="palmer-columns">
-                <!-- Fed/Fiscal Calendar -->
-                <div class="palmer-column">
-                    <h3 class="palmer-col-title">FED & FISCAL CALENDAR</h3>
-                    <div class="palmer-events" id="palmer-events">
-                        <div class="event-loading">Loading events...</div>
-                    </div>
-                </div>
-                
-                <!-- Macro Headlines -->
-                <div class="palmer-column">
-                    <h3 class="palmer-col-title">MACRO HEADLINES</h3>
-                    <div class="palmer-headlines" id="palmer-headlines">
-                        <div class="headline-loading">Loading headlines...</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Palmer's Insight -->
+            <!-- Palmer's Insight (prominent) -->
             <div class="palmer-insight" id="palmer-insight">
                 <div class="insight-loading">Loading insight...</div>
             </div>
             
+            <!-- Collapsible Details: Events + Headlines -->
+            <details class="palmer-details">
+                <summary class="palmer-details-toggle">Calendar & Headlines</summary>
+                <div class="palmer-columns">
+                    <div class="palmer-column">
+                        <h3 class="palmer-col-title">FED & FISCAL</h3>
+                        <div class="palmer-events" id="palmer-events">
+                            <div class="event-loading">Loading events...</div>
+                        </div>
+                    </div>
+                    <div class="palmer-column">
+                        <h3 class="palmer-col-title">HEADLINES</h3>
+                        <div class="palmer-headlines" id="palmer-headlines">
+                            <div class="headline-loading">Loading headlines...</div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+            
             <div class="palmer-timestamp" id="palmer-timestamp"></div>
         </section>
+
+        <!-- Positions Table -->
+        <section class="positions-section">
+            <h2>Open Positions</h2>
+            <div class="table-container">
+                <table id="positions-table">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Quantity</th>
+                            <th>Market Value</th>
+                            <th>P&L</th>
+                            <th>P&L %</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                        <tr>
+                            <td colspan="5" class="loading">Loading positions...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Closed Trades (collapsible, least important) -->
+        <details class="closed-trades-section">
+            <summary class="closed-trades-toggle">
+                <span class="toggle-title">Closed Trades</span>
+                <span class="win-rate-badge" id="win-rate-badge">
+                    <span class="win-rate-value" id="win-rate-value">—</span>
+                </span>
+                <span class="realized-pnl-badge" id="realized-pnl-badge">—</span>
+            </summary>
+            
+            <!-- Summary Stats -->
+            <div class="closed-stats" id="closed-stats">
+                <div class="closed-stat">
+                    <span class="stat-label">Wins</span>
+                    <span class="stat-value wins" id="total-wins">—</span>
+                </div>
+                <div class="closed-stat">
+                    <span class="stat-label">Losses</span>
+                    <span class="stat-value losses" id="total-losses">—</span>
+                </div>
+            </div>
+            
+            <!-- Closed Trades Table -->
+            <div class="table-container">
+                <table id="closed-trades-table">
+                    <thead>
+                        <tr>
+                            <th>Position</th>
+                            <th>Cost</th>
+                            <th>Proceeds</th>
+                            <th>P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="closed-trades-body">
+                        <tr>
+                            <td colspan="4" class="loading">Loading closed trades...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </details>
     </div>
 
     <script src="{{ url_for('static', filename='dashboard.js') }}"></script>

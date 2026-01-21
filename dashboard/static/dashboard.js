@@ -120,38 +120,6 @@ function updateDashboard() {
                 alphaBtcEl.textContent = '';
             }
 
-            // Update macro indicators
-            const macroContainer = document.getElementById('macro-indicators');
-            if (data.macro_indicators && data.macro_indicators.length > 0) {
-                macroContainer.innerHTML = data.macro_indicators.map(ind => {
-                    const valueStr = ind.unit === 'bps' 
-                        ? `${ind.value.toFixed(0)} ${ind.unit}`
-                        : ind.unit === '%'
-                        ? `${ind.value.toFixed(2)}${ind.unit}`
-                        : `${ind.value.toFixed(1)}`;
-                    
-                    const inRange = ind.in_range === true;
-                    const itemClass = inRange ? 'macro-item in-range' : 'macro-item';
-                    const contextClass = inRange ? 'macro-context in-range' : 'macro-context';
-                    const targetText = ind.target || '';
-                    const contextText = ind.context || '';
-                    
-                    const description = ind.description ? `<div class="macro-description">${ind.description}</div>` : '';
-                    return `
-                        <div class="${itemClass}">
-                            <div class="macro-label">${ind.label}</div>
-                            ${description}
-                            <div class="macro-value">${valueStr}</div>
-                            ${targetText ? `<div class="macro-target">Target: <span class="target-label">${targetText}</span></div>` : ''}
-                            ${contextText ? `<div class="${contextClass}">${contextText}</div>` : ''}
-                            <div class="macro-asof">${ind.asof}</div>
-                        </div>
-                    `;
-                }).join('');
-            } else {
-                macroContainer.innerHTML = '<div class="macro-item"><div class="macro-label">No data</div><div class="macro-value">—</div></div>';
-            }
-
             // Update positions table
             const tbody = document.getElementById('positions-body');
             if (data.positions.length === 0) {
@@ -307,19 +275,22 @@ function fetchClosedTrades() {
     fetch('/api/closed-trades')
         .then(response => response.json())
         .then(data => {
-            // Update win rate badge
+            // Update toggle badges (win rate + realized P&L)
             const winRateValue = document.getElementById('win-rate-value');
             const winRateBadge = document.getElementById('win-rate-badge');
             if (data.win_rate !== undefined) {
-                winRateValue.textContent = `${data.win_rate.toFixed(0)}%`;
-                winRateBadge.classList.add(data.win_rate >= 50 ? 'positive' : 'negative');
+                winRateValue.textContent = `${data.win_rate.toFixed(0)}% W`;
+                winRateBadge.className = 'win-rate-badge ' + (data.win_rate >= 50 ? 'positive' : 'negative');
             }
             
-            // Update stats
-            const realizedPnl = document.getElementById('realized-pnl');
-            realizedPnl.textContent = formatCurrency(data.total_pnl || 0);
-            realizedPnl.className = 'stat-value ' + ((data.total_pnl || 0) >= 0 ? 'positive' : 'negative');
+            const realizedPnlBadge = document.getElementById('realized-pnl-badge');
+            if (realizedPnlBadge) {
+                const pnl = data.total_pnl || 0;
+                realizedPnlBadge.textContent = formatCurrency(pnl);
+                realizedPnlBadge.className = 'realized-pnl-badge ' + (pnl >= 0 ? 'positive' : 'negative');
+            }
             
+            // Update stats inside the expanded section
             document.getElementById('total-wins').textContent = data.wins || 0;
             document.getElementById('total-losses').textContent = data.losses || 0;
             

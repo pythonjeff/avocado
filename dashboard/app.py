@@ -400,18 +400,6 @@ def get_positions_data():
         alpha_sp500 = return_pct - sp500_return if sp500_return is not None else None
         alpha_btc = return_pct - btc_return if btc_return is not None else None
         
-        # Get macro indicators
-        macro_indicators = []
-        hy_oas = get_hy_oas()
-        if hy_oas:
-            macro_indicators.append(hy_oas)
-        vix = get_vix()
-        if vix:
-            macro_indicators.append(vix)
-        yield_10y = get_10y_yield()
-        if yield_10y:
-            macro_indicators.append(yield_10y)
-        
         # Get cash available from account
         cash_available = 0.0
         try:
@@ -432,7 +420,6 @@ def get_positions_data():
             "alpha_sp500": alpha_sp500,
             "alpha_btc": alpha_btc,
             "cash_available": cash_available,
-            "macro_indicators": macro_indicators,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
@@ -468,7 +455,6 @@ def get_positions_data():
             "total_value": 0.0,
             "nav_equity": nav_equity,
             "original_capital": original_capital,
-            "macro_indicators": [],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
