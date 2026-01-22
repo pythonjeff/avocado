@@ -104,7 +104,7 @@ body {
     left: 0;
     right: 0;
     height: 3px;
-    background: var(--accent-blue);
+    background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent-blue) 50%, transparent 100%);
     border-radius: 2px;
 }
 
@@ -504,21 +504,21 @@ body {
     position: relative;
 }
 
-/* Blue accent line - left edge */
+/* Blue accent line - left edge (subtle) */
 .open-positions-section::before {
     content: "";
     position: absolute;
     top: 0;
     left: 0;
-    width: var(--line-accent);
+    width: 2px;
     height: 100%;
-    background: var(--accent-blue);
+    background: linear-gradient(180deg, var(--accent-blue) 0%, transparent 80%);
     opacity: 0;
     transition: opacity 0.3s ease;
 }
 
 .open-positions-section[open]::before {
-    opacity: 1;
+    opacity: 0.6;
 }
 
 .open-positions-toggle {
@@ -750,21 +750,21 @@ tbody tr:hover {
     position: relative;
 }
 
-/* Blue accent line - left edge */
+/* Blue accent line - left edge (subtle) */
 .closed-trades-section::before {
     content: "";
     position: absolute;
     top: 0;
     left: 0;
-    width: var(--line-accent);
+    width: 2px;
     height: 100%;
-    background: var(--accent-blue);
+    background: linear-gradient(180deg, var(--accent-blue) 0%, transparent 80%);
     opacity: 0;
     transition: opacity 0.3s ease;
 }
 
 .closed-trades-section[open]::before {
-    opacity: 1;
+    opacity: 0.6;
 }
 
 .closed-trades-toggle {
