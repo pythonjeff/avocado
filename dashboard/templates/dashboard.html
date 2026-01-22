@@ -160,9 +160,17 @@
             
         </section>
 
-        <!-- Positions Table -->
-        <section class="positions-section">
-            <h2>Open Positions</h2>
+        <!-- Open Positions (collapsible) -->
+        <details class="open-positions-section" open>
+            <summary class="open-positions-toggle">
+                <span class="toggle-title">Open Positions</span>
+                <span class="open-pnl-badge" id="open-pnl-badge">
+                    <span class="open-pnl-value" id="open-pnl-value">—</span>
+                </span>
+                <span class="open-pnl-amount-badge" id="open-pnl-amount-badge">—</span>
+            </summary>
+            
+            <!-- Open Positions Table -->
             <div class="table-container">
                 <table id="positions-table">
                     <thead>
@@ -181,7 +189,7 @@
                     </tbody>
                 </table>
             </div>
-        </section>
+        </details>
 
         <!-- Closed Trades (collapsible, least important) -->
         <details class="closed-trades-section">

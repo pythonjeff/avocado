@@ -189,6 +189,48 @@ function updateDashboard() {
                     </tr>
                 `;
             }).join('');
+            
+            // Calculate and display open positions P&L % return
+            const openPnlBadge = document.getElementById('open-pnl-badge');
+            const openPnlValue = document.getElementById('open-pnl-value');
+            const openPnlAmountBadge = document.getElementById('open-pnl-amount-badge');
+            
+            if (data.positions && data.positions.length > 0) {
+                // Calculate total P&L and total cost basis
+                let totalPnl = 0;
+                let totalCost = 0;
+                
+                data.positions.forEach(pos => {
+                    const pnl = pos.pnl || 0;
+                    const marketValue = pos.market_value || 0;
+                    totalPnl += pnl;
+                    
+                    // Calculate entry cost: market_value - pnl (works for both long and short)
+                    // For long: entry = current - profit = what we paid
+                    // For short: entry = current + loss = what we received (proceeds)
+                    const entryCost = marketValue - pnl;
+                    totalCost += Math.abs(entryCost);
+                });
+                
+                // Calculate P&L % return
+                const pnlPct = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
+                
+                // Update badges
+                if (openPnlValue) {
+                    openPnlValue.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`;
+                    openPnlBadge.classList.toggle('positive', pnlPct >= 0);
+                    openPnlBadge.classList.toggle('negative', pnlPct < 0);
+                }
+                
+                if (openPnlAmountBadge) {
+                    openPnlAmountBadge.textContent = formatCurrency(totalPnl);
+                    openPnlAmountBadge.classList.toggle('positive', totalPnl >= 0);
+                    openPnlAmountBadge.classList.toggle('negative', totalPnl < 0);
+                }
+            } else {
+                if (openPnlValue) openPnlValue.textContent = '—';
+                if (openPnlAmountBadge) openPnlAmountBadge.textContent = '—';
+            }
         })
         .catch(error => {
             console.error('Fetch error:', error);

@@ -318,7 +318,7 @@ def _generate_position_theory(position, regime_context, settings):
         qty = position.get("qty", 0)
         opt_info = position.get("opt_info")
         
-        # Build position description
+        # Build position description and determine required direction
         if opt_info:
             underlying = opt_info.get("underlying", symbol.split('/')[0] if '/' in symbol else symbol[:3])
             # Handle both "opt_type" and "type" keys
@@ -328,10 +328,26 @@ def _generate_position_theory(position, regime_context, settings):
             is_long = qty > 0
             is_call = opt_type in ['C', 'CALL']
             
-            pos_desc = f"{'Long' if is_long else 'Short'} {opt_type} on {underlying} (strike {strike}, expires {expiry})"
+            # Determine what needs to happen for profit
+            if is_long and is_call:
+                direction = f"{underlying} MUST RISE"
+                vol_need = "IV expansion helps"
+            elif is_long and not is_call:
+                direction = f"{underlying} MUST FALL"
+                vol_need = "IV expansion helps"
+            elif not is_long and is_call:
+                direction = f"{underlying} MUST STAY DOWN or FALL"
+                vol_need = "IV crush helps"
+            else:  # short put
+                direction = f"{underlying} MUST STAY UP or RISE"
+                vol_need = "IV crush helps"
+            
+            pos_desc = f"{'Long' if is_long else 'Short'} {opt_type} on {underlying}"
         else:
             underlying = symbol
             is_long = qty > 0
+            direction = f"{underlying} MUST {'RISE' if is_long else 'FALL'}"
+            vol_need = "N/A"
             pos_desc = f"{'Long' if is_long else 'Short'} {underlying}"
         
         # Get current macro context
@@ -341,16 +357,17 @@ def _generate_position_theory(position, regime_context, settings):
         regime = regime_context.get("regime", "UNKNOWN")
         
         prompt = f"""Position: {pos_desc}
+REQUIREMENT: {direction} ({vol_need})
 Current regime: {regime}
 Macro: VIX {vix}, HY spreads {hy_spread}bp, 10Y {yield_10y}%
 
-In 1 sentence (max 50 chars), what market conditions would make this profitable?
-Consider: regime shifts, volatility, rates, credit spreads, sector dynamics.
+In 1 sentence (max 50 chars), what macro conditions would cause {direction.lower()}?
+Be specific about regime, volatility, rates, credit, or sector catalysts.
 
-Be specific and actionable. Examples:
-- "Risk-off spike → VIX >25, credit widens"
-- "Growth outperforms → rates fall, tech rallies"
-- "China stress → FXI breaks support, vol expands"
+Examples:
+- Long PUT on FXI: "China stress → FXI breaks, vol expands"
+- Long CALL on SOFI: "Growth rally → rates fall, tech outperforms"
+- Long PUT on TAN: "Solar selloff → rates rise, sector rotation"
 
 Theory:"""
         
