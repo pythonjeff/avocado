@@ -944,94 +944,150 @@ tbody tr:hover {
     padding: 12px 0;
 }
 
-/* Economic Calendar Table (Trading Economics style) */
-.econ-calendar {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 11px;
+/* Economic Calendar - Stunning Visual Design */
+.calendar-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--accent-blue);
 }
 
-.econ-calendar th {
-    text-align: left;
-    padding: 6px 4px;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 2px solid var(--bg-border);
+.calendar-flag {
+    font-size: 20px;
 }
 
-.econ-calendar td {
-    padding: 6px 4px;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
-    vertical-align: middle;
-}
-
-.econ-calendar tr:last-child td {
-    border-bottom: none;
-}
-
-.econ-calendar tr.released {
-    background-color: rgba(255,255,255,0.5);
-}
-
-.econ-calendar tr.upcoming {
-    background-color: transparent;
-}
-
-.econ-calendar tr.upcoming td {
-    color: var(--text-secondary);
-}
-
-.econ-calendar .col-date {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-dim);
-    white-space: nowrap;
-    width: 60px;
-}
-
-.econ-calendar .col-event {
-    font-weight: 500;
+.calendar-date {
+    font-size: 13px;
+    font-weight: 700;
     color: var(--text-primary);
+    letter-spacing: -0.3px;
 }
 
-.econ-calendar .col-event .event-link {
+.releases-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.release-card {
+    background: white;
+    border-radius: 8px;
+    padding: 12px 14px;
+    border-left: 3px solid transparent;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    transition: all 0.15s ease;
+}
+
+.release-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transform: translateX(2px);
+}
+
+.release-card.beat {
+    border-left-color: var(--green);
+    background: linear-gradient(90deg, rgba(0,168,107,0.04) 0%, white 30%);
+}
+
+.release-card.miss {
+    border-left-color: var(--red);
+    background: linear-gradient(90deg, rgba(230,57,70,0.04) 0%, white 30%);
+}
+
+.release-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.release-time {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    letter-spacing: 0.5px;
+}
+
+.release-indicator {
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.release-indicator:not(:empty) {
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.release-card.beat .release-indicator {
+    color: var(--green);
+    background: rgba(0,168,107,0.1);
+}
+
+.release-card.miss .release-indicator {
+    color: var(--red);
+    background: rgba(230,57,70,0.1);
+}
+
+.release-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    line-height: 1.3;
+}
+
+.release-name a {
     color: var(--text-primary);
     text-decoration: none;
 }
 
-.econ-calendar .col-event .event-link:hover {
+.release-name a:hover {
     color: var(--accent-blue);
 }
 
-.econ-calendar .col-actual,
-.econ-calendar .col-prev,
-.econ-calendar .col-est {
-    text-align: right;
+.release-values {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+}
+
+.release-value {
+    text-align: center;
+}
+
+.release-value .value-label {
+    display: block;
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 2px;
+}
+
+.release-value .value-num {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
     font-variant-numeric: tabular-nums;
-    width: 55px;
 }
 
-.econ-calendar .col-actual {
-    font-weight: 600;
-}
-
-.econ-calendar .col-actual.beat {
+.release-value.actual .value-num.beat {
     color: var(--green);
 }
 
-.econ-calendar .col-actual.miss {
+.release-value.actual .value-num.miss {
     color: var(--red);
 }
 
-.econ-calendar .col-prev {
+.no-releases {
+    text-align: center;
+    padding: 24px;
     color: var(--text-dim);
-}
-
-.econ-calendar .col-est {
-    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
 }
 
 /* Headlines List */

@@ -231,57 +231,71 @@ function fetchPalmerDashboard() {
                 `;
             }
             
-            // Update Fed/Fiscal events in Trading Economics table format
-            if (data.events && data.events.length > 0) {
+            // Update today's economic releases (stunning visual design)
+            if (data.events && data.events.releases && data.events.releases.length > 0) {
+                const releases = data.events.releases;
+                const calDate = data.events.date || 'Today';
+                
                 eventsContainer.innerHTML = `
-                    <table class="econ-calendar">
-                        <thead>
-                            <tr>
-                                <th class="col-date">Date</th>
-                                <th class="col-event">Event</th>
-                                <th class="col-actual">Actual</th>
-                                <th class="col-prev">Prev</th>
-                                <th class="col-est">Est</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${data.events.map(e => {
-                                const dateStr = e.date ? e.date.substring(5) : '—';
-                                const timeStr = e.time ? ` ${e.time}` : '';
-                                const eventLink = e.url 
-                                    ? `<a href="${e.url}" target="_blank" rel="noopener noreferrer" class="event-link">${e.event || '—'}</a>`
-                                    : (e.event || '—');
-                                
-                                // Format values
-                                const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '—';
-                                const prevVal = e.previous !== null && e.previous !== undefined ? e.previous : '—';
-                                const estVal = e.estimate !== null && e.estimate !== undefined ? e.estimate : '—';
-                                
-                                // Determine actual styling (green for beat, red for miss)
-                                let actualClass = '';
-                                if (e.is_released && e.surprise_direction) {
-                                    actualClass = e.surprise_direction === 'beat' ? 'beat' : 
-                                                  e.surprise_direction === 'miss' ? 'miss' : '';
-                                }
-                                
-                                // Row styling for released vs upcoming
-                                const rowClass = e.is_released ? 'released' : 'upcoming';
-                                
-                                return `
-                                    <tr class="${rowClass}">
-                                        <td class="col-date">${dateStr}${timeStr}</td>
-                                        <td class="col-event">${eventLink}</td>
-                                        <td class="col-actual ${actualClass}">${actualVal}</td>
-                                        <td class="col-prev">${prevVal}</td>
-                                        <td class="col-est">${estVal}</td>
-                                    </tr>
-                                `;
-                            }).join('')}
-                        </tbody>
-                    </table>
+                    <div class="calendar-header">
+                        <span class="calendar-flag">🇺🇸</span>
+                        <span class="calendar-date">${calDate}</span>
+                    </div>
+                    <div class="releases-grid">
+                        ${releases.map(e => {
+                            const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '—';
+                            const prevVal = e.previous !== null && e.previous !== undefined ? e.previous : '—';
+                            const estVal = e.estimate !== null && e.estimate !== undefined ? e.estimate : '—';
+                            
+                            // Surprise indicator
+                            let indicator = '';
+                            let indicatorClass = '';
+                            if (e.surprise_direction === 'beat') {
+                                indicator = '▲';
+                                indicatorClass = 'beat';
+                            } else if (e.surprise_direction === 'miss') {
+                                indicator = '▼';
+                                indicatorClass = 'miss';
+                            }
+                            
+                            const eventLink = e.url 
+                                ? `<a href="${e.url}" target="_blank" rel="noopener noreferrer">${e.event}</a>`
+                                : e.event;
+                            
+                            return `
+                                <div class="release-card ${indicatorClass}">
+                                    <div class="release-header">
+                                        <span class="release-time">${e.time || ''}</span>
+                                        <span class="release-indicator">${indicator}</span>
+                                    </div>
+                                    <div class="release-name">${eventLink}</div>
+                                    <div class="release-values">
+                                        <div class="release-value actual">
+                                            <span class="value-label">Actual</span>
+                                            <span class="value-num ${indicatorClass}">${actualVal}</span>
+                                        </div>
+                                        <div class="release-value">
+                                            <span class="value-label">Est</span>
+                                            <span class="value-num">${estVal}</span>
+                                        </div>
+                                        <div class="release-value">
+                                            <span class="value-label">Prev</span>
+                                            <span class="value-num">${prevVal}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
                 `;
             } else {
-                eventsContainer.innerHTML = '<div class="event-loading">No economic events</div>';
+                eventsContainer.innerHTML = `
+                    <div class="calendar-header">
+                        <span class="calendar-flag">🇺🇸</span>
+                        <span class="calendar-date">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                    </div>
+                    <div class="no-releases">No US economic releases today</div>
+                `;
             }
             
             // Update macro headlines with clickable links
