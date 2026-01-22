@@ -320,9 +320,17 @@ function fetchPalmerDashboard() {
                 headlinesContainer.innerHTML = '<div class="headline-loading">No recent headlines</div>';
             }
             
-            // Update Palmer's insight
+            // Update Palmer's insight with timestamp
             if (data.analysis) {
-                insightContainer.innerHTML = `<div class="insight-text">"${data.analysis}"</div>`;
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+                insightContainer.innerHTML = `
+                    <div class="insight-text">"${data.analysis}"</div>
+                    <div class="insight-meta">
+                        <span class="insight-timestamp">Updated ${timeStr} ET</span>
+                        <span class="insight-tag">AI-Generated</span>
+                    </div>
+                `;
             } else {
                 insightContainer.innerHTML = '<div class="insight-loading">Palmer is generating analysis...</div>';
                 // Retry in 10 seconds

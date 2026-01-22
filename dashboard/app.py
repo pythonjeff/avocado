@@ -941,74 +941,80 @@ def fetch_earnings_calendar(tickers, days_ahead=14):
 
 
 def fetch_macro_headlines(settings, portfolio_tickers=None, limit=5):
-    """Fetch top macro/financial headlines using FMP stock news API.
-    
-    Uses portfolio tickers if provided, otherwise defaults to macro ETFs.
-    """
+    """Fetch headlines ONLY for portfolio tickers - no fallbacks."""
     import requests
+    from zoneinfo import ZoneInfo
     headlines = []
     
     try:
-        # Build ticker list: portfolio tickers first, then macro fallback
-        tickers_to_fetch = []
+        if not portfolio_tickers:
+            return headlines
         
-        if portfolio_tickers:
-            # Filter to underlying tickers (not option symbols)
-            clean_tickers = [t for t in portfolio_tickers if t and len(t) <= 5 and t.isalpha()]
-            tickers_to_fetch.extend(clean_tickers[:5])
+        # Filter to clean underlying tickers only
+        clean_tickers = list(set([
+            t.upper() for t in portfolio_tickers 
+            if t and len(t) <= 5 and t.isalpha() and t.upper() not in ['C', 'P']
+        ]))
         
-        # Add macro tickers if we don't have enough (avoid GLD - over-represents gold news)
-        macro_tickers = ["SPY", "QQQ", "TLT", "VIX"]
-        for mt in macro_tickers:
-            if mt not in tickers_to_fetch and len(tickers_to_fetch) < 6:
-                tickers_to_fetch.append(mt)
+        if not clean_tickers:
+            return headlines
         
-        # Fetch from FMP stock news
-        tickers_str = ",".join(tickers_to_fetch)
-        url = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={tickers_str}&limit={limit * 2}&apikey={settings.fmp_api_key}"
+        # Fetch from FMP stock news - portfolio tickers ONLY
+        tickers_str = ",".join(clean_tickers[:8])
+        url = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={tickers_str}&limit={limit * 3}&apikey={settings.fmp_api_key}"
         
         resp = requests.get(url, timeout=10)
         data = resp.json()
         
         if isinstance(data, list):
+            now = datetime.now(timezone.utc)
             for item in data:
                 title = item.get("title", "") or ""
                 site = item.get("site", "") or ""
                 published = item.get("publishedDate", "") or ""
                 ticker = item.get("symbol", "") or ""
-                url = item.get("url", "") or ""
+                news_url = item.get("url", "") or ""
                 
-                if title:
-                    # Parse date for display
-                    time_str = ""
-                    if published:
-                        try:
-                            from datetime import datetime
-                            dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if not title:
+                    continue
+                
+                # Parse date and show relative time
+                time_str = ""
+                if published:
+                    try:
+                        dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                        diff = now - dt
+                        hours = diff.total_seconds() / 3600
+                        if hours < 1:
+                            time_str = f"{int(diff.total_seconds() / 60)}m ago"
+                        elif hours < 24:
+                            time_str = f"{int(hours)}h ago"
+                        else:
                             time_str = dt.strftime("%b %d")
-                        except:
-                            pass
-                    
-                    headlines.append({
-                        "headline": title[:120],
-                        "source": site[:20] if site else "News",
-                        "time": time_str,
-                        "ticker": ticker,
-                        "url": url,
-                    })
+                    except:
+                        pass
+                
+                headlines.append({
+                    "headline": title[:100],
+                    "source": site[:15] if site else "News",
+                    "time": time_str,
+                    "ticker": ticker,
+                    "url": news_url,
+                })
         
         # Dedupe by headline
         seen = set()
         unique_headlines = []
         for h in headlines:
-            if h["headline"] not in seen:
-                seen.add(h["headline"])
+            key = h["headline"][:50].lower()
+            if key not in seen:
+                seen.add(key)
                 unique_headlines.append(h)
         
         headlines = unique_headlines[:limit]
         
     except Exception as e:
-        print(f"[Palmer] FMP news fetch error: {e}")
+        print(f"[Palmer] Headlines error: {e}")
     
     return headlines
 
@@ -1099,12 +1105,16 @@ def fetch_fed_fiscal_calendar(settings):
                 event_name_lower = event_name.lower()
                 event_date_str = item.get("date", "")
                 
-                # Parse time
+                # Parse time and convert to Eastern Time
                 event_time = ""
                 if len(event_date_str) > 10:
                     try:
+                        from zoneinfo import ZoneInfo
                         dt = datetime.fromisoformat(event_date_str.replace(" ", "T").replace("Z", ""))
-                        event_time = dt.strftime("%I:%M %p").lstrip("0")
+                        # FMP times are UTC - convert to Eastern
+                        dt_utc = dt.replace(tzinfo=ZoneInfo("UTC"))
+                        dt_et = dt_utc.astimezone(ZoneInfo("America/New_York"))
+                        event_time = dt_et.strftime("%I:%M %p ET").lstrip("0")
                     except:
                         pass
                 
