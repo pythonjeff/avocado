@@ -6,6 +6,7 @@
     --bg-card: #ffffff;
     --accent-blue: #0066ff;
     --accent-blue-light: rgba(0, 102, 255, 0.08);
+    --accent-blue-subtle: rgba(0, 102, 255, 0.4);
     --text-primary: #1a1a1a;
     --text-secondary: #4a4a4a;
     --text-dim: #8a8a8a;
@@ -15,6 +16,9 @@
     --red-light: rgba(230, 57, 70, 0.08);
     --shadow: rgba(0, 0, 0, 0.06);
     --shadow-hover: rgba(0, 0, 0, 0.12);
+    /* Blue line design system */
+    --line-accent: 3px;
+    --line-subtle: 2px;
 }
 
 /* Smooth animations */
@@ -183,8 +187,22 @@ body {
     justify-content: space-between;
     align-items: center;
     box-shadow: 0 1px 3px var(--shadow);
-    transition: all 0.2s ease;
+    transition: all 0.25s ease;
     animation: fadeIn 0.4s ease-out both;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Blue accent line - bottom edge */
+.summary-item::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 0;
+    height: var(--line-accent);
+    background: var(--accent-blue);
+    transition: width 0.3s ease;
 }
 
 .summary-item:nth-child(1) { animation-delay: 0.05s; }
@@ -194,7 +212,11 @@ body {
 
 .summary-item:hover {
     box-shadow: 0 4px 16px var(--shadow-hover);
-    border-color: var(--accent-blue);
+    border-color: var(--bg-border);
+}
+
+.summary-item:hover::after {
+    width: 100%;
 }
 
 .summary-label {
@@ -247,6 +269,19 @@ body {
     color: white;
     border: 1px solid rgba(255,255,255,0.06);
     box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Blue accent line - top edge */
+.performance-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--line-accent);
+    background: linear-gradient(90deg, var(--accent-blue), rgba(0, 102, 255, 0.3));
 }
 
 .performance-header {
@@ -466,6 +501,24 @@ body {
     border: 1px solid var(--bg-border);
     border-radius: 10px;
     overflow: hidden;
+    position: relative;
+}
+
+/* Blue accent line - left edge */
+.open-positions-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--line-accent);
+    height: 100%;
+    background: var(--accent-blue);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.open-positions-section[open]::before {
+    opacity: 1;
 }
 
 .open-positions-toggle {
@@ -576,7 +629,7 @@ table {
 
 thead {
     background: linear-gradient(to bottom, #f8f9fa, #f5f5f5);
-    border-bottom: 2px solid var(--bg-border);
+    border-bottom: var(--line-subtle) solid var(--accent-blue);
 }
 
 th {
@@ -694,6 +747,24 @@ tbody tr:hover {
     border: 1px solid var(--bg-border);
     border-radius: 10px;
     overflow: hidden;
+    position: relative;
+}
+
+/* Blue accent line - left edge */
+.closed-trades-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--line-accent);
+    height: 100%;
+    background: var(--accent-blue);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.closed-trades-section[open]::before {
+    opacity: 1;
 }
 
 .closed-trades-toggle {
@@ -731,6 +802,20 @@ tbody tr:hover {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-primary);
+    position: relative;
+    display: inline-block;
+}
+
+/* Blue underline on toggle title */
+.toggle-title::after {
+    content: "";
+    position: absolute;
+    bottom: -4px;
+    left: 0;
+    width: 40px;
+    height: 2px;
+    background: var(--accent-blue);
+    border-radius: 1px;
 }
 
 .realized-pnl-badge {
@@ -885,7 +970,19 @@ tbody tr:hover {
     border-radius: 12px;
     padding: 28px;
     box-shadow: 0 2px 8px var(--shadow);
-    border-top: 4px solid #1a1a1a;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Blue accent line - top edge with gradient */
+.palmer-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--line-accent);
+    background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent-blue) 60%, transparent 100%);
 }
 
 /* Palmer collapsible details */
@@ -903,6 +1000,20 @@ tbody tr:hover {
     border-radius: 10px;
     padding: 16px;
     animation: fadeIn 0.4s ease-out both;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Blue accent line - top edge */
+.palmer-grid-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 16px;
+    right: 16px;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent-blue), transparent);
+    opacity: 0.5;
 }
 
 .palmer-grid-item:nth-child(1) { animation-delay: 0.1s; }
@@ -1143,6 +1254,21 @@ tbody tr:hover {
     letter-spacing: 4px;
     color: var(--text-primary);
     margin: 0;
+    position: relative;
+    display: inline-block;
+    padding-bottom: 8px;
+}
+
+/* Blue underline accent on PALMER name */
+.palmer-name::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 60%;
+    height: var(--line-accent);
+    background: var(--accent-blue);
+    border-radius: 2px;
 }
 
 /* Traffic Light Indicators */
@@ -1154,6 +1280,18 @@ tbody tr:hover {
     padding: 20px;
     background: var(--bg-light);
     border-radius: 8px;
+    position: relative;
+}
+
+/* Subtle blue underline */
+.traffic-lights::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 20px;
+    right: 20px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-blue-subtle), transparent);
 }
 
 .traffic-item {
@@ -1672,8 +1810,22 @@ tbody tr:hover {
 .dashboard-footer {
     margin-top: 48px;
     padding-top: 24px;
-    border-top: 1px solid var(--bg-border);
+    border-top: none;
     text-align: center;
+    position: relative;
+}
+
+/* Blue accent line - centered */
+.dashboard-footer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 80px;
+    height: var(--line-accent);
+    background: var(--accent-blue);
+    border-radius: 2px;
 }
 
 .footer-content {
@@ -1750,6 +1902,19 @@ tbody tr:hover {
     border: 1px solid rgba(255,255,255,0.08);
     animation: fadeIn 0.4s ease-out both;
     animation-delay: 0.3s;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Blue accent line - top edge */
+.forecast-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--line-accent);
+    background: linear-gradient(90deg, var(--accent-blue), rgba(0, 102, 255, 0.3));
 }
 
 .forecast-header {
