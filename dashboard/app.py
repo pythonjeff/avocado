@@ -1065,8 +1065,8 @@ def _get_event_source_url(event_name: str) -> str:
     return "https://tradingeconomics.com/united-states/calendar"
 
 
-def fetch_fed_fiscal_calendar(settings, days_ahead=14):
-    """Fetch Fed and fiscal-focused economic events."""
+def fetch_fed_fiscal_calendar(settings, days_back=3, days_ahead=14):
+    """Fetch Fed and fiscal-focused economic events (recent + upcoming) in Trading Economics format."""
     events = []
     seen_events = set()  # Track seen event names to prevent duplicates
     
@@ -1074,7 +1074,8 @@ def fetch_fed_fiscal_calendar(settings, days_ahead=14):
     fed_fiscal_keywords = [
         'fed', 'fomc', 'powell', 'rate', 'treasury', 'auction', 'debt', 'deficit',
         'fiscal', 'budget', 'gdp', 'cpi', 'pce', 'inflation', 'employment', 'payroll',
-        'jobless', 'retail', 'housing', 'durable', 'ism', 'pmi'
+        'jobless', 'retail', 'housing', 'durable', 'ism', 'pmi', 'consumer', 'spending',
+        'corporate', 'profit', 'sales'
     ]
     
     try:
@@ -1085,7 +1086,8 @@ def fetch_fed_fiscal_calendar(settings, days_ahead=14):
         from datetime import datetime, timedelta
         import requests
         
-        start = datetime.now().strftime("%Y-%m-%d")
+        # Fetch both recent (with actuals) and upcoming events
+        start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         end = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         
         url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={start}&to={end}&apikey={fmp_key}"
@@ -1093,39 +1095,81 @@ def fetch_fed_fiscal_calendar(settings, days_ahead=14):
         
         if resp.status_code == 200:
             data = resp.json() or []
+            now = datetime.now()
             
             for item in data:
                 event_name_lower = (item.get("event") or "").lower()
+                country = item.get("country", "").upper()
                 
-                # Only include Fed/fiscal focused events
+                # Only US events and Fed/fiscal focused
+                if country and country != "US":
+                    continue
+                    
                 is_fed_fiscal = any(kw in event_name_lower for kw in fed_fiscal_keywords)
                 
                 if is_fed_fiscal:
                     event_name = item.get("event", "")
-                    event_date = item.get("date", "")[:10]
+                    event_date_str = item.get("date", "")
+                    event_date = event_date_str[:10] if event_date_str else ""
+                    
+                    # Parse time if available
+                    event_time = ""
+                    if len(event_date_str) > 10:
+                        try:
+                            dt = datetime.fromisoformat(event_date_str.replace(" ", "T").replace("Z", ""))
+                            event_time = dt.strftime("%H:%M")
+                        except:
+                            pass
                     
                     # Create a unique key to prevent duplicates
-                    # Use simplified event name (first 30 chars) + date
                     dedup_key = f"{event_name[:30].lower().strip()}|{event_date}"
                     
                     if dedup_key in seen_events:
                         continue
                     seen_events.add(dedup_key)
                     
+                    # Get values
+                    actual = item.get("actual")
+                    estimate = item.get("estimate")
+                    previous = item.get("previous")
+                    
+                    # Determine if this is a past event (has actual) or upcoming
+                    is_released = actual is not None
+                    
+                    # Calculate surprise (beat/miss) for released data
+                    surprise = None
+                    surprise_direction = None
+                    if is_released and estimate is not None:
+                        try:
+                            actual_val = float(actual)
+                            estimate_val = float(estimate)
+                            surprise = actual_val - estimate_val
+                            # For most indicators, higher = better. Exceptions handled below
+                            surprise_direction = "beat" if surprise > 0 else "miss" if surprise < 0 else "inline"
+                            # For jobless claims, lower = better
+                            if "jobless" in event_name_lower or "unemployment" in event_name_lower:
+                                surprise_direction = "beat" if surprise < 0 else "miss" if surprise > 0 else "inline"
+                        except:
+                            pass
+                    
                     events.append({
                         "date": event_date,
+                        "time": event_time,
                         "event": event_name,
-                        "estimate": item.get("estimate"),
-                        "previous": item.get("previous"),
-                        "impact": item.get("impact", ""),
+                        "actual": actual,
+                        "previous": previous,
+                        "estimate": estimate,
+                        "is_released": is_released,
+                        "surprise": surprise,
+                        "surprise_direction": surprise_direction,
                         "url": _get_event_source_url(event_name),
                     })
     except Exception as e:
         print(f"[Palmer] Fed/fiscal calendar error: {e}")
     
-    # Sort by date and limit
-    events.sort(key=lambda x: x["date"])
-    return events[:8]
+    # Sort by date (most recent first for released, then upcoming by date)
+    events.sort(key=lambda x: (not x.get("is_released", False), x["date"]))
+    return events[:12]
 
 
 def _generate_palmer_analysis():
@@ -1230,14 +1274,18 @@ def _generate_palmer_analysis():
     credit_label, credit_color = get_credit_status(hy_val)
     rates_label, rates_color = get_rates_status(yield_val)
     
-    # Format events for display
+    # Format events for display (Trading Economics style table)
     events_display = []
-    for e in fed_fiscal_events[:4]:
-        est_str = f"est: {e['estimate']}" if e.get('estimate') else ""
+    for e in fed_fiscal_events[:10]:
         events_display.append({
             "date": e["date"],
-            "event": e["event"][:50],
-            "estimate": est_str,
+            "time": e.get("time", ""),
+            "event": e["event"][:60],
+            "actual": e.get("actual"),
+            "previous": e.get("previous"),
+            "estimate": e.get("estimate"),
+            "is_released": e.get("is_released", False),
+            "surprise_direction": e.get("surprise_direction"),
             "url": e.get("url", ""),
         })
     

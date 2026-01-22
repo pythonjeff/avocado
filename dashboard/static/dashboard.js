@@ -231,23 +231,57 @@ function fetchPalmerDashboard() {
                 `;
             }
             
-            // Update Fed/Fiscal events with source links
+            // Update Fed/Fiscal events in Trading Economics table format
             if (data.events && data.events.length > 0) {
-                eventsContainer.innerHTML = data.events.map(e => {
-                    const eventContent = e.url 
-                        ? `<a href="${e.url}" target="_blank" rel="noopener noreferrer" class="event-link">${e.event || '—'}</a>`
-                        : (e.event || '—');
-                    return `
-                    <div class="event-item">
-                        <span class="event-date">${e.date ? e.date.substring(5) : '—'}</span>
-                        <div>
-                            <div class="event-name">${eventContent}</div>
-                            ${e.estimate ? `<div class="event-estimate">${e.estimate}</div>` : ''}
-                        </div>
-                    </div>
-                `}).join('');
+                eventsContainer.innerHTML = `
+                    <table class="econ-calendar">
+                        <thead>
+                            <tr>
+                                <th class="col-date">Date</th>
+                                <th class="col-event">Event</th>
+                                <th class="col-actual">Actual</th>
+                                <th class="col-prev">Prev</th>
+                                <th class="col-est">Est</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.events.map(e => {
+                                const dateStr = e.date ? e.date.substring(5) : '—';
+                                const timeStr = e.time ? ` ${e.time}` : '';
+                                const eventLink = e.url 
+                                    ? `<a href="${e.url}" target="_blank" rel="noopener noreferrer" class="event-link">${e.event || '—'}</a>`
+                                    : (e.event || '—');
+                                
+                                // Format values
+                                const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '—';
+                                const prevVal = e.previous !== null && e.previous !== undefined ? e.previous : '—';
+                                const estVal = e.estimate !== null && e.estimate !== undefined ? e.estimate : '—';
+                                
+                                // Determine actual styling (green for beat, red for miss)
+                                let actualClass = '';
+                                if (e.is_released && e.surprise_direction) {
+                                    actualClass = e.surprise_direction === 'beat' ? 'beat' : 
+                                                  e.surprise_direction === 'miss' ? 'miss' : '';
+                                }
+                                
+                                // Row styling for released vs upcoming
+                                const rowClass = e.is_released ? 'released' : 'upcoming';
+                                
+                                return `
+                                    <tr class="${rowClass}">
+                                        <td class="col-date">${dateStr}${timeStr}</td>
+                                        <td class="col-event">${eventLink}</td>
+                                        <td class="col-actual ${actualClass}">${actualVal}</td>
+                                        <td class="col-prev">${prevVal}</td>
+                                        <td class="col-est">${estVal}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `;
             } else {
-                eventsContainer.innerHTML = '<div class="event-loading">No upcoming Fed/fiscal events</div>';
+                eventsContainer.innerHTML = '<div class="event-loading">No economic events</div>';
             }
             
             // Update macro headlines with clickable links

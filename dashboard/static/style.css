@@ -858,7 +858,7 @@ tbody tr:hover {
 /* Two Column Layout */
 .palmer-columns {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 3fr 2fr;
     gap: 24px;
     margin-bottom: 28px;
 }
@@ -867,6 +867,10 @@ tbody tr:hover {
     background: var(--bg-light);
     border-radius: 8px;
     padding: 20px;
+}
+
+.palmer-column-wide {
+    /* Calendar column gets more space */
 }
 
 .palmer-col-title {
@@ -938,6 +942,96 @@ tbody tr:hover {
     color: var(--text-dim);
     font-style: italic;
     padding: 12px 0;
+}
+
+/* Economic Calendar Table (Trading Economics style) */
+.econ-calendar {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+
+.econ-calendar th {
+    text-align: left;
+    padding: 6px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid var(--bg-border);
+}
+
+.econ-calendar td {
+    padding: 6px 4px;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+    vertical-align: middle;
+}
+
+.econ-calendar tr:last-child td {
+    border-bottom: none;
+}
+
+.econ-calendar tr.released {
+    background-color: rgba(255,255,255,0.5);
+}
+
+.econ-calendar tr.upcoming {
+    background-color: transparent;
+}
+
+.econ-calendar tr.upcoming td {
+    color: var(--text-secondary);
+}
+
+.econ-calendar .col-date {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    white-space: nowrap;
+    width: 60px;
+}
+
+.econ-calendar .col-event {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.econ-calendar .col-event .event-link {
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+.econ-calendar .col-event .event-link:hover {
+    color: var(--accent-blue);
+}
+
+.econ-calendar .col-actual,
+.econ-calendar .col-prev,
+.econ-calendar .col-est {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    width: 55px;
+}
+
+.econ-calendar .col-actual {
+    font-weight: 600;
+}
+
+.econ-calendar .col-actual.beat {
+    color: var(--green);
+}
+
+.econ-calendar .col-actual.miss {
+    color: var(--red);
+}
+
+.econ-calendar .col-prev {
+    color: var(--text-dim);
+}
+
+.econ-calendar .col-est {
+    color: var(--text-secondary);
 }
 
 /* Headlines List */
