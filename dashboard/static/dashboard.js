@@ -231,93 +231,45 @@ function fetchPalmerDashboard() {
                 `;
             }
             
-            // Update today's economic releases (stunning visual design)
+            // Update today's economic releases (compact - top 3)
             if (data.events && data.events.releases && data.events.releases.length > 0) {
-                const releases = data.events.releases;
-                const calDate = data.events.date || 'Today';
+                const releases = data.events.releases.slice(0, 3); // Top 3 only
                 
-                eventsContainer.innerHTML = `
-                    <div class="calendar-header">
-                        <span class="calendar-flag">🇺🇸</span>
-                        <span class="calendar-date">${calDate}</span>
-                    </div>
-                    <div class="releases-grid">
-                        ${releases.map(e => {
-                            const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '—';
-                            const prevVal = e.previous !== null && e.previous !== undefined ? e.previous : '—';
-                            const estVal = e.estimate !== null && e.estimate !== undefined ? e.estimate : '—';
-                            
-                            // Surprise indicator
-                            let indicator = '';
-                            let indicatorClass = '';
-                            if (e.surprise_direction === 'beat') {
-                                indicator = '▲';
-                                indicatorClass = 'beat';
-                            } else if (e.surprise_direction === 'miss') {
-                                indicator = '▼';
-                                indicatorClass = 'miss';
-                            }
-                            
-                            const eventLink = e.url 
-                                ? `<a href="${e.url}" target="_blank" rel="noopener noreferrer">${e.event}</a>`
-                                : e.event;
-                            
-                            return `
-                                <div class="release-card ${indicatorClass}">
-                                    <div class="release-header">
-                                        <span class="release-time">${e.time || ''}</span>
-                                        <span class="release-indicator">${indicator}</span>
-                                    </div>
-                                    <div class="release-name">${eventLink}</div>
-                                    <div class="release-values">
-                                        <div class="release-value actual">
-                                            <span class="value-label">Actual</span>
-                                            <span class="value-num ${indicatorClass}">${actualVal}</span>
-                                        </div>
-                                        <div class="release-value">
-                                            <span class="value-label">Est</span>
-                                            <span class="value-num">${estVal}</span>
-                                        </div>
-                                        <div class="release-value">
-                                            <span class="value-label">Prev</span>
-                                            <span class="value-num">${prevVal}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
-                `;
+                eventsContainer.innerHTML = releases.map(e => {
+                    const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '';
+                    let indicatorClass = e.surprise_direction || '';
+                    
+                    return `
+                        <div class="event-item ${indicatorClass}">
+                            <span class="event-time">${e.time || ''}</span>
+                            <span class="event-name">${e.event}</span>
+                            ${actualVal ? `<span class="event-value ${indicatorClass}">${actualVal}</span>` : ''}
+                        </div>
+                    `;
+                }).join('');
             } else {
-                eventsContainer.innerHTML = `
-                    <div class="calendar-header">
-                        <span class="calendar-flag">🇺🇸</span>
-                        <span class="calendar-date">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</span>
-                    </div>
-                    <div class="no-releases">No US economic releases today</div>
-                `;
+                eventsContainer.innerHTML = '<div class="grid-loading">No releases today</div>';
             }
             
-            // Update macro headlines with clickable links
+            // Update portfolio headlines (compact - top 3)
             if (data.headlines && data.headlines.length > 0) {
-                headlinesContainer.innerHTML = data.headlines.map(h => {
-                    const headlineContent = h.url 
-                        ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer" class="headline-link">${h.headline}</a>`
-                        : h.headline;
+                const headlines = data.headlines.slice(0, 3); // Top 3 only
+                
+                headlinesContainer.innerHTML = headlines.map(h => {
+                    const titleEl = h.url 
+                        ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer" class="news-title">${h.headline}</a>`
+                        : `<span class="news-title">${h.headline}</span>`;
+                    
                     return `
-                    <div class="headline-item">
-                        <div class="headline-text">
-                            ${h.ticker ? `<span class="headline-ticker">${h.ticker}</span> ` : ''}${headlineContent}
+                        <div class="news-item">
+                            ${h.ticker ? `<span class="news-ticker">${h.ticker}</span>` : ''}
+                            ${titleEl}
+                            <span class="news-meta">${h.source || ''} ${h.time ? '• ' + h.time : ''}</span>
                         </div>
-                        <div class="headline-meta">
-                            <span class="headline-source">${h.source || 'News'}</span>
-                            ${h.time ? ` • ${h.time}` : ''}
-                            ${h.url ? ' • <span class="read-more">Read →</span>' : ''}
-                        </div>
-                    </div>
-                `}).join('');
+                    `;
+                }).join('');
             } else {
-                headlinesContainer.innerHTML = '<div class="headline-loading">No recent headlines</div>';
+                headlinesContainer.innerHTML = '<div class="grid-loading">No portfolio news</div>';
             }
             
             // Update Palmer's insight with timestamp

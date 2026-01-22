@@ -105,30 +105,28 @@
                 <div class="insight-loading">Loading insight...</div>
             </div>
             
-            <!-- Collapsible Details: Events + Headlines -->
-            <details class="palmer-details">
-                <summary class="palmer-details-toggle">Calendar & Headlines</summary>
-                <div class="palmer-columns">
-                    <div class="palmer-column palmer-column-wide">
-                        <h3 class="palmer-col-title">
-                            TODAY'S RELEASES
-                            <span class="live-badge">LIVE</span>
-                        </h3>
-                        <div class="palmer-events" id="palmer-events">
-                            <div class="event-loading">Loading releases...</div>
-                        </div>
-                    </div>
-                    <div class="palmer-column">
-                        <h3 class="palmer-col-title">
-                            PORTFOLIO NEWS
-                            <span class="dynamic-badge">DYNAMIC</span>
-                        </h3>
-                        <div class="palmer-headlines" id="palmer-headlines">
-                            <div class="headline-loading">Loading headlines...</div>
-                        </div>
+            <!-- Calendar & Headlines - Side by Side -->
+            <div class="palmer-grid">
+                <div class="palmer-grid-item">
+                    <h4 class="grid-title">
+                        <span class="grid-icon">📅</span>
+                        TODAY
+                        <span class="live-dot"></span>
+                    </h4>
+                    <div class="grid-content" id="palmer-events">
+                        <div class="grid-loading">Loading...</div>
                     </div>
                 </div>
-            </details>
+                <div class="palmer-grid-item">
+                    <h4 class="grid-title">
+                        <span class="grid-icon">📰</span>
+                        PORTFOLIO
+                    </h4>
+                    <div class="grid-content" id="palmer-headlines">
+                        <div class="grid-loading">Loading...</div>
+                    </div>
+                </div>
+            </div>
             
         </section>
 

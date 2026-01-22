@@ -940,8 +940,8 @@ def fetch_earnings_calendar(tickers, days_ahead=14):
         return []
 
 
-def fetch_macro_headlines(settings, portfolio_tickers=None, limit=5):
-    """Fetch headlines ONLY for portfolio tickers - no fallbacks."""
+def fetch_macro_headlines(settings, portfolio_tickers=None, limit=3):
+    """Fetch headlines ONLY for portfolio tickers - top 3 most relevant."""
     import requests
     from zoneinfo import ZoneInfo
     headlines = []
@@ -1195,7 +1195,7 @@ def _generate_palmer_analysis():
             portfolio_tickers.append(p.get("symbol"))
     
     # Get macro headlines (with portfolio fallback)
-    headlines = fetch_macro_headlines(settings, portfolio_tickers=portfolio_tickers, limit=5)
+    headlines = fetch_macro_headlines(settings, portfolio_tickers=portfolio_tickers, limit=3)
     
     # Build regime snapshot for structured output
     regime_snapshot = {
