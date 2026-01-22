@@ -228,7 +228,6 @@ body {
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.5px;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 
 .summary-value.positive {
@@ -321,7 +320,6 @@ body {
     font-weight: 700;
     color: white;
     letter-spacing: -0.5px;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
 }
 
 .perf-metric .perf-value.positive {
@@ -558,14 +556,12 @@ tbody tr:hover {
 
 .pnl-amount {
     font-weight: 700;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
     font-size: 14px;
     margin-bottom: 2px;
 }
 
 .pnl-percent {
     font-weight: 500;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
     font-size: 11px;
     opacity: 0.85;
 }
@@ -580,13 +576,12 @@ tbody tr:hover {
 
 .qty-cell {
     text-align: center;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
     font-weight: 600;
 }
 
 .value-cell {
     text-align: right;
-    font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    font-weight: 500;
 }
 
 .pnl-pct {
@@ -935,7 +930,6 @@ tbody tr:hover {
     align-items: center;
     gap: 6px;
     font-size: 11px;
-    font-family: 'SF Mono', 'Monaco', monospace;
 }
 
 .cal-actual {
@@ -1044,7 +1038,6 @@ tbody tr:hover {
 .grid-item-value {
     font-size: 11px;
     font-weight: 700;
-    font-family: 'SF Mono', 'Monaco', monospace;
 }
 
 .grid-item-value.beat { color: var(--green); }
@@ -1739,7 +1732,6 @@ tbody tr:hover {
     font-size: 24px;
     font-weight: 700;
     color: #fff;
-    font-family: 'SF Mono', 'Monaco', monospace;
 }
 
 .forecast-value.positive { color: #4ade80; }
