@@ -1,6 +1,7 @@
 """
 v0.1 Monte Carlo CLI with position-level representation.
 """
+import os
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -18,36 +19,43 @@ def register_v01(labs_app: typer.Typer) -> None:
         n_scenarios: int = typer.Option(10000, "--scenarios", "-n"),
         horizon_months: int = typer.Option(6, "--horizon"),
         regime: str = typer.Option("ALL", "--regime", help="ALL, STAGFLATION, GOLDILOCKS, RISK_OFF, etc."),
-        use_real_positions: bool = typer.Option(False, "--real", help="Use real positions from Alpaca (not example)"),
+        live: bool = typer.Option(True, "--live/--paper", help="Use LIVE account (default) or paper account"),
+        example: bool = typer.Option(False, "--example", help="Use example portfolio instead of real positions"),
     ):
         """
         v0.1 Monte Carlo with position-level representation.
         
-        Improvements:
-        - Position-level P&L (not aggregate greeks)
-        - Separate S and IV simulation
-        - Regime-conditional assumptions
-        - Jump risk modeling
-        - Scenario attribution
+        Defaults to LIVE account with real positions.
         
-        Example:
+        Examples:
+            lox labs mc-v01                    # Live account
+            lox labs mc-v01 --paper            # Paper account
+            lox labs mc-v01 --example          # Example portfolio
             lox labs mc-v01 --regime STAGFLATION
         """
         c = Console()
         
-        c.print("[cyan]Building portfolio...[/cyan]")
-        
-        if use_real_positions:
-            # Use real Alpaca positions
+        if example:
+            c.print("[cyan]Building example portfolio...[/cyan]")
+            portfolio = create_example_portfolio()
+            account_type = "EXAMPLE"
+        else:
+            # Force live or paper via environment override
+            if live:
+                os.environ["ALPACA_PAPER"] = "false"
+                account_type = "🟢 LIVE"
+            else:
+                os.environ["ALPACA_PAPER"] = "true"
+                account_type = "🟡 PAPER"
+            
+            c.print(f"[cyan]Fetching positions from {account_type} account...[/cyan]")
             settings = safe_load_settings()
             portfolio = alpaca_to_portfolio(settings)
             
             if len(portfolio.positions) == 0:
-                c.print("[yellow]⚠️  No positions found in Alpaca. Using example portfolio instead.[/yellow]")
+                c.print(f"[yellow]⚠️  No positions found in {account_type} account. Using example portfolio.[/yellow]")
                 portfolio = create_example_portfolio()
-        else:
-            # Use example portfolio
-            portfolio = create_example_portfolio()
+                account_type = "EXAMPLE (no positions)"
         
         c.print("[cyan]Calculating greeks...[/cyan]")
         summary = portfolio.summary()
@@ -78,6 +86,7 @@ def register_v01(labs_app: typer.Typer) -> None:
         port_table.add_column("Metric", style="bold cyan")
         port_table.add_column("Value", justify="right")
         
+        port_table.add_row("Account", f"[bold]{account_type}[/bold]")
         port_table.add_row("NAV", f"${summary['nav']:,.0f}")
         port_table.add_row("Positions", f"{summary['n_positions']} ({summary['n_options']} options)")
         port_table.add_row("Delta (per +1% move)", f"${portfolio.net_delta_usd_per_1pct:+,.0f}  ({summary['net_delta_pct']:+.1f}% NAV)")

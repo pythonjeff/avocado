@@ -231,19 +231,23 @@ function fetchPalmerDashboard() {
                 `;
             }
             
-            // Update today's economic releases (compact - top 3)
+            // Update today's economic releases (uniform grid items - top 3)
             if (data.events && data.events.releases && data.events.releases.length > 0) {
-                const releases = data.events.releases.slice(0, 3); // Top 3 only
+                const releases = data.events.releases.slice(0, 3);
                 
                 eventsContainer.innerHTML = releases.map(e => {
                     const actualVal = e.actual !== null && e.actual !== undefined ? e.actual : '';
-                    let indicatorClass = e.surprise_direction || '';
+                    const indicatorClass = e.surprise_direction || '';
                     
                     return `
-                        <div class="event-item ${indicatorClass}">
-                            <span class="event-time">${e.time || ''}</span>
-                            <span class="event-name">${e.event}</span>
-                            ${actualVal ? `<span class="event-value ${indicatorClass}">${actualVal}</span>` : ''}
+                        <div class="grid-item ${indicatorClass}">
+                            <div class="grid-item-left">
+                                <span class="grid-item-time">${e.time || ''}</span>
+                            </div>
+                            <div class="grid-item-content">
+                                <span class="grid-item-title">${e.event}</span>
+                                ${actualVal ? `<span class="grid-item-meta">Actual: <span class="grid-item-value ${indicatorClass}">${actualVal}</span></span>` : ''}
+                            </div>
                         </div>
                     `;
                 }).join('');
@@ -251,20 +255,24 @@ function fetchPalmerDashboard() {
                 eventsContainer.innerHTML = '<div class="grid-loading">No releases today</div>';
             }
             
-            // Update portfolio headlines (compact - top 3)
+            // Update portfolio headlines (uniform grid items - top 3)
             if (data.headlines && data.headlines.length > 0) {
-                const headlines = data.headlines.slice(0, 3); // Top 3 only
+                const headlines = data.headlines.slice(0, 3);
                 
                 headlinesContainer.innerHTML = headlines.map(h => {
                     const titleEl = h.url 
-                        ? `<a href="${h.url}" target="_blank" rel="noopener noreferrer" class="news-title">${h.headline}</a>`
-                        : `<span class="news-title">${h.headline}</span>`;
+                        ? `<a href="${h.url}" target="_blank" rel="noopener" class="grid-item-title">${h.headline}</a>`
+                        : `<span class="grid-item-title">${h.headline}</span>`;
                     
                     return `
-                        <div class="news-item">
-                            ${h.ticker ? `<span class="news-ticker">${h.ticker}</span>` : ''}
-                            ${titleEl}
-                            <span class="news-meta">${h.source || ''} ${h.time ? '• ' + h.time : ''}</span>
+                        <div class="grid-item">
+                            <div class="grid-item-left">
+                                ${h.ticker ? `<span class="grid-item-ticker">${h.ticker}</span>` : ''}
+                            </div>
+                            <div class="grid-item-content">
+                                ${titleEl}
+                                <span class="grid-item-meta">${h.source || ''}${h.time ? ' • ' + h.time : ''}</span>
+                            </div>
                         </div>
                     `;
                 }).join('');

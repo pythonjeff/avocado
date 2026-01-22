@@ -1105,16 +1105,13 @@ def fetch_fed_fiscal_calendar(settings):
                 event_name_lower = event_name.lower()
                 event_date_str = item.get("date", "")
                 
-                # Parse time and convert to Eastern Time
+                # Parse time - FMP economic calendar is already in Eastern Time
                 event_time = ""
                 if len(event_date_str) > 10:
                     try:
-                        from zoneinfo import ZoneInfo
-                        dt = datetime.fromisoformat(event_date_str.replace(" ", "T").replace("Z", ""))
-                        # FMP times are UTC - convert to Eastern
-                        dt_utc = dt.replace(tzinfo=ZoneInfo("UTC"))
-                        dt_et = dt_utc.astimezone(ZoneInfo("America/New_York"))
-                        event_time = dt_et.strftime("%I:%M %p ET").lstrip("0")
+                        # Format: "2024-01-22 10:00:00" - already ET
+                        dt = datetime.fromisoformat(event_date_str.replace(" ", "T"))
+                        event_time = dt.strftime("%I:%M %p ET").lstrip("0")
                     except:
                         pass
                 
