@@ -507,15 +507,24 @@ body {
     display: flex;
     align-items: center;
     gap: 8px;
-    background-color: var(--bg-light);
+    background-color: var(--bg-card);
     border: 1px solid var(--bg-border);
     border-radius: 8px;
     padding: 8px 16px;
-    margin-left: auto;
+}
+
+.open-pnl-badge.positive {
+    border-color: var(--green);
+    background-color: rgba(40, 167, 69, 0.05);
+}
+
+.open-pnl-badge.negative {
+    border-color: var(--red);
+    background-color: rgba(220, 53, 69, 0.05);
 }
 
 .open-pnl-value {
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
 }
@@ -532,6 +541,7 @@ body {
     font-size: 14px;
     font-weight: 700;
     color: var(--text-primary);
+    margin-left: auto;
 }
 
 .open-pnl-amount-badge.positive {
