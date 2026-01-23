@@ -232,6 +232,37 @@
                 </table>
             </div>
         </details>
+
+        <!-- Investor Ledger (collapsible) -->
+        <details class="investor-section">
+            <summary class="investor-toggle">
+                <span class="toggle-title">Investor Ledger</span>
+                <span class="nav-per-unit-badge" id="nav-per-unit-badge">
+                    <span class="nav-per-unit-label">NAV/Unit</span>
+                    <span class="nav-per-unit-value" id="nav-per-unit-value">—</span>
+                </span>
+            </summary>
+            
+            <div class="table-container">
+                <table id="investor-table">
+                    <thead>
+                        <tr>
+                            <th>Investor</th>
+                            <th>Ownership</th>
+                            <th>Basis</th>
+                            <th>Value</th>
+                            <th>P&L</th>
+                            <th>Return</th>
+                        </tr>
+                    </thead>
+                    <tbody id="investor-body">
+                        <tr>
+                            <td colspan="6" class="loading">Loading investor data...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </details>
         
         <!-- Footer -->
         <footer class="dashboard-footer">

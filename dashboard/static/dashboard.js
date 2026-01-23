@@ -481,6 +481,49 @@ function fetchClosedTrades() {
         });
 }
 
+function fetchInvestors() {
+    fetch('/api/investors')
+        .then(response => response.json())
+        .then(data => {
+            // Update NAV per unit badge
+            const navPerUnitValue = document.getElementById('nav-per-unit-value');
+            if (navPerUnitValue && data.nav_per_unit) {
+                navPerUnitValue.textContent = `$${data.nav_per_unit.toFixed(4)}`;
+            }
+            
+            // Update investor table
+            const tbody = document.getElementById('investor-body');
+            
+            if (!data.investors || data.investors.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="loading">No investor data available</td></tr>';
+                return;
+            }
+            
+            tbody.innerHTML = data.investors.map(inv => {
+                const pnlClass = inv.pnl >= 0 ? 'positive' : 'negative';
+                const returnClass = inv.return_pct >= 0 ? 'positive' : 'negative';
+                const pnlSign = inv.pnl >= 0 ? '+' : '';
+                const returnSign = inv.return_pct >= 0 ? '+' : '';
+                
+                return `
+                    <tr>
+                        <td><span class="investor-code">${inv.code}</span></td>
+                        <td>${inv.ownership.toFixed(1)}%</td>
+                        <td>${formatCurrency(inv.basis)}</td>
+                        <td>${formatCurrency(inv.value)}</td>
+                        <td class="investor-pnl ${pnlClass}">${pnlSign}${formatCurrency(inv.pnl, true)}</td>
+                        <td class="investor-return ${returnClass}">${returnSign}${inv.return_pct.toFixed(1)}%</td>
+                    </tr>
+                `;
+            }).join('');
+        })
+        .catch(error => {
+            console.error('Investors fetch error:', error);
+            document.getElementById('investor-body').innerHTML = 
+                '<tr><td colspan="6" class="loading">Error loading investor data</td></tr>';
+        });
+}
+
 // Update footer with last updated time
 function updateFooterTimestamp() {
     const footerEl = document.getElementById('last-updated');
@@ -493,6 +536,7 @@ function updateFooterTimestamp() {
 // Initial load
 updateDashboard();
 fetchClosedTrades();
+fetchInvestors();
 fetchPalmerDashboard();
 updateFooterTimestamp();
 
@@ -500,6 +544,7 @@ updateFooterTimestamp();
 setInterval(() => {
     updateDashboard();
     fetchClosedTrades();
+    fetchInvestors();
     fetchPalmerDashboard();
     updateFooterTimestamp();
 }, 300000);

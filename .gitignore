@@ -15,4 +15,8 @@ data/tracker.sqlite3-shm
 data/tracker.sqlite3-wal
 .DS_Store
 .cursor/
-data/*.csv
+# Keep NAV tracking files, ignore other data CSVs
+data/cache/**/*.csv
+!data/nav_sheet.csv
+!data/nav_investor_flows.csv
+!data/nav_flows.csv

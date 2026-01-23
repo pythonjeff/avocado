@@ -725,6 +725,126 @@ def api_closed_trades():
         return jsonify({"error": str(e), "trades": [], "total_pnl": 0, "win_rate": 0})
 
 
+@app.route('/api/investors')
+def api_investors():
+    """API endpoint for investor ledger (unitized NAV)."""
+    try:
+        return jsonify(get_investor_data())
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "investors": [], "nav_per_unit": 1.0, "total_units": 0})
+
+
+def get_investor_data():
+    """Fetch investor ledger with unitized returns."""
+    try:
+        # Try to read from local investor flows file
+        nav_sheet_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_sheet.csv")
+        investor_flows_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_investor_flows.csv")
+        
+        if not os.path.exists(investor_flows_path):
+            return {"error": "Investor flows file not found", "investors": [], "nav_per_unit": 1.0, "total_units": 0}
+        
+        # Read investor flows
+        import csv
+        from datetime import datetime as dt
+        
+        flows = []
+        with open(investor_flows_path, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                flows.append({
+                    "ts": row.get("ts", ""),
+                    "code": row.get("code", ""),
+                    "amount": float(row.get("amount", 0)),
+                })
+        
+        # Read nav sheet for equity
+        nav_rows = []
+        if os.path.exists(nav_sheet_path):
+            with open(nav_sheet_path, "r") as f:
+                reader = csv.DictReader(f)
+                nav_rows = list(reader)
+        
+        # Get current equity from Alpaca if nav sheet not available
+        current_equity = 0.0
+        if nav_rows:
+            current_equity = float(nav_rows[-1].get("equity", 0))
+        else:
+            try:
+                settings = load_settings()
+                trading, _ = make_clients(settings)
+                account = trading.get_account()
+                if account:
+                    current_equity = float(getattr(account, 'equity', 0) or 0)
+            except:
+                pass
+        
+        # Compute unitization (simplified version)
+        # Merge flows and nav snapshots chronologically
+        events = []
+        for f in flows:
+            events.append((f["ts"], "flow", f))
+        for r in nav_rows:
+            events.append((r.get("ts", ""), "nav", r))
+        events.sort(key=lambda x: x[0])
+        
+        nav_per_unit = 1.0
+        units_by = {}
+        total_units = 0.0
+        
+        for ts, kind, obj in events:
+            if kind == "flow":
+                if nav_per_unit <= 0:
+                    nav_per_unit = 1.0
+                du = float(obj["amount"]) / float(nav_per_unit)
+                code = obj["code"]
+                units_by[code] = float(units_by.get(code, 0.0)) + du
+                total_units += du
+            else:
+                # NAV snapshot
+                if total_units > 0:
+                    equity = float(obj.get("equity", 0))
+                    if equity > 0:
+                        nav_per_unit = equity / total_units
+        
+        # Calculate investor values
+        basis_by = {}
+        for f in flows:
+            code = f["code"]
+            basis_by[code] = float(basis_by.get(code, 0.0)) + float(f["amount"])
+        
+        investors = []
+        for code in sorted(units_by.keys()):
+            units = float(units_by.get(code, 0.0))
+            value = units * float(nav_per_unit)
+            basis = float(basis_by.get(code, 0.0))
+            pnl = value - basis
+            ret = (pnl / basis * 100) if basis != 0 else 0
+            ownership = (units / total_units * 100) if total_units > 0 else 0
+            investors.append({
+                "code": code,
+                "ownership": round(ownership, 1),
+                "basis": round(basis, 2),
+                "value": round(value, 2),
+                "pnl": round(pnl, 2),
+                "return_pct": round(ret, 1),
+            })
+        
+        return {
+            "investors": investors,
+            "nav_per_unit": round(nav_per_unit, 6),
+            "total_units": round(total_units, 2),
+            "equity": round(current_equity, 2),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "investors": [], "nav_per_unit": 1.0, "total_units": 0}
+
+
 def get_closed_trades_data():
     """Fetch closed trades and calculate realized P&L using FIFO matching."""
     from collections import defaultdict

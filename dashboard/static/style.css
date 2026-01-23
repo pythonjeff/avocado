@@ -899,6 +899,136 @@ tbody tr:hover {
     color: var(--red);
 }
 
+/* Investor Ledger Section */
+.investor-section {
+    margin-top: 32px;
+    background-color: var(--bg-card);
+    border: 1px solid var(--bg-border);
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+}
+
+.investor-section::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 2px;
+    height: 100%;
+    background: linear-gradient(180deg, var(--accent-blue) 0%, transparent 80%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.investor-section[open]::before {
+    opacity: 0.6;
+}
+
+.investor-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 24px;
+    list-style: none;
+    background: var(--bg-card);
+    border-bottom: 1px solid transparent;
+    transition: background 0.2s;
+}
+
+.investor-toggle:hover {
+    background: var(--bg-light);
+}
+
+.investor-section[open] .investor-toggle {
+    border-bottom-color: var(--bg-border);
+}
+
+.investor-toggle::before {
+    content: "▶";
+    font-size: 10px;
+    color: var(--text-dim);
+    transition: transform 0.2s;
+}
+
+.investor-section[open] .investor-toggle::before {
+    transform: rotate(90deg);
+}
+
+.investor-section .table-container {
+    padding: 0 24px 24px;
+}
+
+.nav-per-unit-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background-color: var(--bg-light);
+    border: 1px solid var(--bg-border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    margin-left: auto;
+}
+
+.nav-per-unit-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.nav-per-unit-value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
+#investor-table th:nth-child(2),
+#investor-table th:nth-child(3),
+#investor-table th:nth-child(4),
+#investor-table th:nth-child(5),
+#investor-table th:nth-child(6),
+#investor-table td:nth-child(2),
+#investor-table td:nth-child(3),
+#investor-table td:nth-child(4),
+#investor-table td:nth-child(5),
+#investor-table td:nth-child(6) {
+    text-align: right;
+}
+
+.investor-code {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.investor-pnl {
+    font-weight: 600;
+}
+
+.investor-pnl.positive {
+    color: var(--green);
+}
+
+.investor-pnl.negative {
+    color: var(--red);
+}
+
+.investor-return {
+    font-weight: 700;
+    font-size: 13px;
+}
+
+.investor-return.positive {
+    color: var(--green);
+}
+
+.investor-return.negative {
+    color: var(--red);
+}
+
 .closed-stats {
     display: flex;
     gap: 24px;
