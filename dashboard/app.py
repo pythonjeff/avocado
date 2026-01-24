@@ -9,6 +9,7 @@ import sys
 import os
 import threading
 import time
+import json
 
 # Add parent directory to path to import lox modules
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -434,6 +435,26 @@ def get_positions_data():
         except Exception as nav_error:
             print(f"Warning: Could not read NAV sheet: {nav_error}")
         
+        # #region agent log
+        try:
+            debug_payload = {
+                "sessionId": "debug-session",
+                "runId": "pre-fix",
+                "hypothesisId": "H1",
+                "location": "dashboard/app.py:get_positions_data:nav_read",
+                "message": "NAV sheet and account snapshot",
+                "data": {
+                    "nav_equity": nav_equity,
+                    "has_nav_rows": bool(nav_rows) if "nav_rows" in locals() else False,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
+                _f.write(json.dumps(debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        
         # Fallback: calculate from account if NAV sheet is empty
         if nav_equity == 0.0 and account:
             try:
@@ -621,7 +642,14 @@ def get_positions_data():
         # Total P&L based on liquidation value (conservative)
         liquidation_pnl = liquidation_nav - original_capital
         
-        # Use TWR (Time-Weighted Return) from nav_sheet - excludes cash flow distortion
+        # Live performance since inception based on current liquidation NAV.
+        # This keeps the LOX Fund row on the dashboard updating on every refresh,
+        # instead of only when the NAV sheet CSV is updated.
+        simple_return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
+        
+        # Optionally also load TWR (Time-Weighted Return) from nav_sheet for reference.
+        # This is exposed separately so it can be used for reports without
+        # interfering with the live dashboard behaviour.
         twr_pct = None
         try:
             nav_sheet_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_sheet.csv")
@@ -631,7 +659,7 @@ def get_positions_data():
                     reader = csv.DictReader(f)
                     rows = list(reader)
                     if rows:
-                        # Get latest TWR cumulative (already a decimal, e.g. 0.128 = 12.8%)
+                        # Latest TWR cumulative is stored as a decimal (e.g. 0.128 = 12.8%)
                         latest = rows[-1]
                         twr_cum = latest.get("twr_cum", "")
                         if twr_cum:
@@ -639,9 +667,52 @@ def get_positions_data():
         except Exception as twr_err:
             print(f"[Positions] Could not read TWR: {twr_err}")
         
-        # Fall back to simple return if TWR not available
-        simple_return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
-        return_pct = twr_pct if twr_pct is not None else simple_return_pct
+        # #region agent log
+        try:
+            debug_payload = {
+                "sessionId": "debug-session",
+                "runId": "pre-fix",
+                "hypothesisId": "H1",
+                "location": "dashboard/app.py:get_positions_data:twr_block",
+                "message": "TWR and liquidation metrics",
+                "data": {
+                    "twr_pct": twr_pct,
+                    "liquidation_nav": liquidation_nav,
+                    "liquidation_pnl": liquidation_pnl,
+                    "original_capital": original_capital,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
+                _f.write(json.dumps(debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
+        
+        # For the dashboard we always surface the live simple return so the LOX Fund
+        # performance row reflects current liquidation NAV.
+        return_pct = simple_return_pct
+        
+        # #region agent log
+        try:
+            debug_payload = {
+                "sessionId": "debug-session",
+                "runId": "pre-fix",
+                "hypothesisId": "H1",
+                "location": "dashboard/app.py:get_positions_data:return_calc",
+                "message": "Final return calculation",
+                "data": {
+                    "simple_return_pct": simple_return_pct,
+                    "twr_pct": twr_pct,
+                    "return_pct": return_pct,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
+                _f.write(json.dumps(debug_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion
         
         # Get benchmark performance since inception for comparison
         sp500_return = get_sp500_return_since_inception()
@@ -656,6 +727,7 @@ def get_positions_data():
             "nav_equity": liquidation_nav,  # Liquidation NAV
             "original_capital": original_capital,
             "return_pct": return_pct,
+            "twr_return_pct": twr_pct,
             "sp500_return": sp500_return,
             "btc_return": btc_return,
             "alpha_sp500": alpha_sp500,
