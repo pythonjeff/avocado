@@ -11,6 +11,7 @@ Author: Lox Capital Research
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -67,13 +68,22 @@ def register_core(app: typer.Typer) -> None:
         positions = trading.get_all_positions()
         n_positions = len(positions)
         
-        total_pnl = sum(_safe_float(getattr(p, "unrealized_pl", 0)) for p in positions)
-        total_cost = sum(
-            _safe_float(getattr(p, "qty", 0)) * _safe_float(getattr(p, "avg_entry_price", 0)) * 
-            (100 if "/" in str(getattr(p, "symbol", "")) else 1)
-            for p in positions
-        )
-        pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
+        # Get total capital from investor flows or env var
+        total_capital = float(os.environ.get("FUND_TOTAL_CAPITAL", 950))
+        try:
+            from ai_options_trader.nav.investors import read_investor_flows
+            flows = read_investor_flows()
+            if flows:
+                total_capital = sum(f.amount for f in flows)
+        except Exception:
+            pass  # Fall back to env var
+        
+        # Fund-level P&L (NAV - Total Capital)
+        fund_pnl = equity - total_capital
+        fund_pnl_pct = (fund_pnl / total_capital * 100) if total_capital > 0 else 0.0
+        
+        # Position-level unrealized P&L (for reference)
+        position_pnl = sum(_safe_float(getattr(p, "unrealized_pl", 0)) for p in positions)
         
         # Risk flags
         losers = [p for p in positions if _safe_float(getattr(p, "unrealized_plpc", 0)) < -0.20]
@@ -84,7 +94,7 @@ def register_core(app: typer.Typer) -> None:
             f"[bold]NAV:[/bold] ${equity:,.0f}",
             f"[bold]Cash:[/bold] ${cash:,.0f} ({cash/equity*100:.0f}% of NAV)" if equity > 0 else f"[bold]Cash:[/bold] ${cash:,.0f}",
             f"[bold]Positions:[/bold] {n_positions}",
-            f"[bold]Unrealized P&L:[/bold] ${total_pnl:+,.0f} ({pnl_pct:+.1f}%)",
+            f"[bold]Fund P&L:[/bold] ${fund_pnl:+,.0f} ({fund_pnl_pct:+.1f}%)",
         ]
         
         if losers:
