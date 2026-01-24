@@ -22,6 +22,10 @@ app.add_typer(live_app, name="live")
 weekly_app = typer.Typer(add_completion=False, help="Weekly report")
 app.add_typer(weekly_app, name="weekly")
 
+# Chat - interactive research conversations
+from ai_options_trader.cli_commands.chat_cmd import app as chat_app
+app.add_typer(chat_app, name="chat")
+
 # ---------------------------------------------------------------------------
 # Power-user tools tucked under `lox labs ...` so `lox --help` stays clean
 # ---------------------------------------------------------------------------
