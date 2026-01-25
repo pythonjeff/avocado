@@ -110,6 +110,8 @@ ticker_app = typer.Typer(add_completion=False, help="Ticker snapshots and LLM ou
 labs_app.add_typer(ticker_app, name="ticker")
 housing_app = typer.Typer(add_completion=False, help="Housing / MBS regime (mortgage spreads + housing proxies)")
 labs_app.add_typer(housing_app, name="housing")
+household_app = typer.Typer(add_completion=False, help="Household wealth regime (MMT sectoral balances: where deficit dollars flow)")
+labs_app.add_typer(household_app, name="household")
 solar_app = typer.Typer(add_completion=False, help="Solar / silver regime (solar basket vs SLV)")
 labs_app.add_typer(solar_app, name="solar")
 track_app = typer.Typer(add_completion=False, help="Track recommendations, executions, and performance")
@@ -146,6 +148,7 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.regimes.commodities_cmd import register as register_commodities
     from ai_options_trader.cli_commands.regimes.crypto_cmd import register as register_crypto
     from ai_options_trader.cli_commands.regimes.housing_cmd import register as register_housing
+    from ai_options_trader.cli_commands.regimes.household_cmd import register as register_household
     from ai_options_trader.cli_commands.regimes.solar_cmd import register as register_solar
     from ai_options_trader.cli_commands.regimes.regimes_cmd import register as register_regimes
     from ai_options_trader.cli_commands.regimes.fedfunds_cmd import register as register_fedfunds
@@ -223,6 +226,7 @@ def _register_commands() -> None:
     register_crypto(crypto_app)
     register_ticker(ticker_app)
     register_housing(housing_app)
+    register_household(household_app)
     register_solar(solar_app)
     
     # Quick pillar access under labs
