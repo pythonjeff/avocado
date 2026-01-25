@@ -225,6 +225,34 @@ After completing research, I make the final call:
 - **Live Portfolio Monte Carlo**: Real-time scenario analysis using actual positions
 - **Dynamic Portfolio Analysis**: LLM adapts to current positions for contextual insights
 
+### v2 Regime System (January 25, 2026)
+
+**Unified Regime Framework**
+- **10 Regime Domains**: Macro, Volatility, Rates, Funding, Fiscal, Commodities, Housing, Monetary, USD, Crypto
+- **Unified State Builder**: Single `lox labs unified` command shows all regimes with scores
+- **ML Feature Extraction**: Export flat feature vectors with `--json` for model training
+- **Standardized Interface**: All regimes return consistent `RegimeResult` with name, label, score, tags
+
+**Leading Indicator Adjustments (Edge Enhancement)**
+- **7 Warning Signals**: Yield curve inversion, VIX elevated/complacent, credit widening, funding stress, rates shock
+- **Probability Adjustments**: Signals adjust transition probabilities (e.g., inverted curve → risk-off prob ×1.8)
+- **Research-Backed**: Each indicator sourced from academic research (Estrella & Mishkin, CBOE, Gilchrist & Zakrajsek)
+- **Transparent**: Active signals displayed in `lox labs transitions` output
+
+**Regime Transition Probabilities**
+- **Historical Frequencies**: Base probabilities from 2000-2024 market data
+- **Horizon Scaling**: 1-month, 3-month, 6-month horizons with mean-reversion
+- **Monte Carlo Integration**: Scenarios weighted by transition probability
+- **Path Simulation**: `simulate_regime_path()` for multi-step forecasts
+
+**New Commands**
+```bash
+lox labs unified              # View all 10 regimes with scores
+lox labs unified --json       # Export ML features
+lox labs transitions          # Transition matrix with signal adjustments
+lox labs transitions --no-adjust  # Raw historical frequencies
+```
+
 ---
 
 ## Research Capabilities

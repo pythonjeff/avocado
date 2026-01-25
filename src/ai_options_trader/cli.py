@@ -2,34 +2,89 @@ from __future__ import annotations
 
 import typer
 
-app = typer.Typer(add_completion=False, help="AI Options Trader CLI")
+app = typer.Typer(
+    add_completion=False, 
+    help="""Lox Capital CLI — Regime-aware portfolio research & management.
+
+\b
+QUICK START:
+  lox status              Portfolio health (NAV, P&L, cash)
+  lox dashboard           All regime pillars at a glance
+  lox chat                Interactive research chat with LLM
+  lox suggest             Trade ideas based on current regime
+
+\b
+RESEARCH:
+  lox labs vol --llm      Volatility research brief
+  lox labs fiscal snapshot US fiscal data (deficits, TGA)
+  lox labs mc-v01 --real  Monte Carlo scenario analysis
+
+\b
+Run 'lox <command> --help' for details on any command.
+"""
+)
 
 # ---------------------------------------------------------------------------
-# "Institutional" CLI surface (intentionally small)
+# Core command groups (most commonly used)
 # ---------------------------------------------------------------------------
-autopilot_app = typer.Typer(add_completion=False, help="Autopilot (run-once workflow)")
-app.add_typer(autopilot_app, name="autopilot")
-nav_app = typer.Typer(add_completion=False, help="NAV sheet + investor ledger (fund accounting)")
-app.add_typer(nav_app, name="nav")
-options_app = typer.Typer(add_completion=False, help="Options scanners (moonshot + helpers)")
-app.add_typer(options_app, name="options")
-ideas_app = typer.Typer(add_completion=False, help="Trade ideas (catalyst + screen)")
-app.add_typer(ideas_app, name="ideas")
-model_app = typer.Typer(add_completion=False, help="ML model (predict/eval/inspect)")
-app.add_typer(model_app, name="model")
-live_app = typer.Typer(add_completion=False, help="Live console (interactive monitoring + manual crypto execution)")
-app.add_typer(live_app, name="live")
-weekly_app = typer.Typer(add_completion=False, help="Weekly report")
-app.add_typer(weekly_app, name="weekly")
 
-# Chat - interactive research conversations
+# Chat - interactive research conversations (most useful, first)
 from ai_options_trader.cli_commands.chat_cmd import app as chat_app
 app.add_typer(chat_app, name="chat")
 
+nav_app = typer.Typer(add_completion=False, help="Fund accounting: NAV tracking, investor ledger, cash flows")
+app.add_typer(nav_app, name="nav")
+
 # ---------------------------------------------------------------------------
-# Power-user tools tucked under `lox labs ...` so `lox --help` stays clean
+# Trade execution & ideas
 # ---------------------------------------------------------------------------
-labs_app = typer.Typer(add_completion=False, help="Labs (power-user regime datasets, diagnostics, legacy tools)")
+autopilot_app = typer.Typer(add_completion=False, help="Automated trade workflow with regime-aware sizing")
+app.add_typer(autopilot_app, name="autopilot")
+
+options_app = typer.Typer(add_completion=False, help="Options scanners: moonshot, picks, budget filters")
+app.add_typer(options_app, name="options")
+
+ideas_app = typer.Typer(add_completion=False, help="Trade ideas from catalysts, screens, and events")
+app.add_typer(ideas_app, name="ideas")
+
+# ---------------------------------------------------------------------------
+# Analytics & reporting
+# ---------------------------------------------------------------------------
+model_app = typer.Typer(add_completion=False, help="ML models: regime prediction, backtesting, evaluation")
+app.add_typer(model_app, name="model")
+
+live_app = typer.Typer(add_completion=False, help="Live monitoring console with real-time alerts")
+app.add_typer(live_app, name="live")
+
+weekly_app = typer.Typer(add_completion=False, help="Weekly performance reports and summaries")
+app.add_typer(weekly_app, name="weekly")
+
+# ---------------------------------------------------------------------------
+# Power-user tools under `lox labs ...`
+# ---------------------------------------------------------------------------
+labs_app = typer.Typer(
+    add_completion=False, 
+    help="""Deep research tools: regime analysis, Monte Carlo, ticker outlook.
+
+\b
+REGIMES:
+  lox labs vol --llm         Volatility regime with LLM analysis
+  lox labs fiscal snapshot   US fiscal data (deficits, issuance, TGA)
+  lox labs funding snapshot  Funding markets (SOFR, repo, reserves)
+  lox labs rates snapshot    Rates/yield curve analysis
+
+\b
+SCENARIOS:
+  lox labs mc-v01 --real     Monte Carlo with live positions
+  lox labs hedge             Defensive trade ideas
+  lox labs grow              Offensive trade ideas
+
+\b
+TICKERS:
+  lox labs ticker outlook -t AAPL   Ticker outlook with regime context
+  lox labs ticker news -t NVDA      Recent news for ticker
+"""
+)
 app.add_typer(labs_app, name="labs")
 macro_app = typer.Typer(add_completion=False, help="Macro signals and datasets")
 labs_app.add_typer(macro_app, name="macro")

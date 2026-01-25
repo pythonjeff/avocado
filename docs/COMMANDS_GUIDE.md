@@ -47,7 +47,23 @@ Use `lox nav investor contribute` for real investor cash moves so both ledgers s
 - **`lox chat -c regimes`**: chat with all regime classifications loaded.
 - **Ticker deep-dive**: ask about specific tickers (e.g., "tell me about FXI") for automatic snapshot, news, and analysis.
 
-### 9) Power-user / Labs
+### 9) Unified Regime Analysis (NEW)
+- **`lox labs unified`**: view all 10 regime domains with scores and Monte Carlo adjustments.
+- **`lox labs unified --json`**: export flat ML feature vector for model training.
+- **`lox labs transitions`**: regime transition probabilities adjusted for leading indicators.
+- **`lox labs transitions --no-adjust`**: raw historical transition frequencies.
+- **`lox labs transitions --horizon 126`**: 6-month forecast horizon.
+- **`lox labs transitions --current risk_on`**: forecast from specific starting state.
+
+**Leading Indicator Signals** (auto-detected):
+- Yield curve inversion (2s10s < 0)
+- VIX elevated (> 25) or complacent (< 13)
+- VIX term structure inversion
+- Credit spreads widening (HY OAS z > 1)
+- Funding stress (SOFR spike)
+- Rates shock (10Y z > 1.5)
+
+### 10) Power-user / Labs
 - **`lox labs <module> ...`**: regime builders, datasets, diagnostics, legacy tools.
   - Examples:
     - `lox labs fiscal snapshot`
@@ -60,7 +76,7 @@ Use `lox nav investor contribute` for real investor cash moves so both ledgers s
     - `lox labs hedge` (defensive trade ideas)
     - `lox labs grow` (offensive trade ideas)
 
-### 10) Portfolio Analysis
+### 11) Portfolio Analysis
 - **`lox status`**: quick portfolio health (NAV, P&L, cash).
 - **`lox status -v`**: with position details.
 - **`lox analyze --depth deep`**: full LLM portfolio analysis.

@@ -396,3 +396,163 @@ class MonteCarloV01:
         if std == 0:
             return 0.0
         return np.mean(((data - mean) / std) ** 3)
+
+
+# =============================================================================
+# Unified Regime Integration
+# =============================================================================
+
+def assumptions_from_unified_regime(
+    unified_state,  # UnifiedRegimeState
+    horizon_months: int = 6,
+    base_regime: str = "ALL",
+) -> ScenarioAssumptions:
+    """
+    Create ScenarioAssumptions from UnifiedRegimeState.
+    
+    This integrates all regime signals into a single set of Monte Carlo
+    assumptions, providing more nuanced scenario generation.
+    
+    Args:
+        unified_state: UnifiedRegimeState from regimes.build_unified_regime_state()
+        horizon_months: Simulation horizon
+        base_regime: Fallback regime if unified state is incomplete
+    
+    Returns:
+        ScenarioAssumptions with regime-adjusted parameters
+    """
+    # Start with base regime assumptions
+    base = ScenarioAssumptions.for_regime(base_regime, horizon_months)
+    
+    # Get Monte Carlo adjustments from unified state
+    mc_params = unified_state.to_monte_carlo_params()
+    
+    # Apply adjustments to base assumptions
+    return ScenarioAssumptions(
+        regime=f"unified_{unified_state.overall_category}",
+        horizon_months=horizon_months,
+        
+        # Equity dynamics with adjustments
+        equity_drift=base.equity_drift + mc_params["equity_drift_adj"],
+        equity_vol=base.equity_vol * mc_params["equity_vol_adj"],
+        
+        # IV dynamics with adjustments
+        iv_mean_reversion_speed=base.iv_mean_reversion_speed,
+        iv_vol_of_vol=base.iv_vol_of_vol * mc_params["iv_vol_adj"],
+        iv_mean_level=base.iv_mean_level + mc_params["iv_drift_adj"],
+        
+        # Correlation (keep base, could enhance later)
+        corr_return_iv=base.corr_return_iv,
+        
+        # Jump risk with adjustments
+        jump_probability=base.jump_probability * mc_params["jump_prob_adj"],
+        jump_size_mean=base.jump_size_mean * mc_params["jump_size_adj"],
+        jump_iv_spike=base.jump_iv_spike * mc_params["jump_size_adj"],
+    )
+
+
+def run_regime_weighted_monte_carlo(
+    portfolio: "Portfolio",
+    unified_state,  # UnifiedRegimeState
+    horizon_months: int = 6,
+    n_scenarios: int = 10000,
+) -> Dict:
+    """
+    Run Monte Carlo with regime-weighted scenario probabilities.
+    
+    This generates scenarios under different regime assumptions and weights
+    them by transition probabilities, providing a more realistic distribution.
+    
+    Args:
+        portfolio: Portfolio to simulate
+        unified_state: Current regime state
+        horizon_months: Simulation horizon
+        n_scenarios: Total scenarios to generate
+    
+    Returns:
+        Dict with weighted analysis results
+    """
+    from ai_options_trader.regimes import get_regime_scenario_weights
+    
+    # Get transition probabilities for regime categories
+    current_category = unified_state.overall_category
+    weights = get_regime_scenario_weights(
+        current_regime=current_category,
+        target_regimes=["risk_on", "cautious", "risk_off"],
+        domain="risk_category",
+        horizon_days=horizon_months * 21,
+    )
+    
+    # Map categories to regimes for simulation
+    regime_mapping = {
+        "risk_on": "GOLDILOCKS",
+        "cautious": "ALL",
+        "risk_off": "RISK_OFF",
+    }
+    
+    all_results = []
+    regime_results = {}
+    
+    for category, weight in weights.items():
+        if weight < 0.01:  # Skip negligible weights
+            continue
+        
+        # Number of scenarios for this regime (proportional to weight)
+        n_regime = max(100, int(n_scenarios * weight))
+        
+        # Create assumptions for this regime
+        regime = regime_mapping.get(category, "ALL")
+        assumptions = ScenarioAssumptions.for_regime(regime, horizon_months)
+        
+        # Apply unified state adjustments
+        mc_params = unified_state.to_monte_carlo_params()
+        assumptions = ScenarioAssumptions(
+            regime=f"weighted_{category}",
+            horizon_months=horizon_months,
+            equity_drift=assumptions.equity_drift + mc_params["equity_drift_adj"],
+            equity_vol=assumptions.equity_vol * mc_params["equity_vol_adj"],
+            iv_mean_reversion_speed=assumptions.iv_mean_reversion_speed,
+            iv_vol_of_vol=assumptions.iv_vol_of_vol * mc_params["iv_vol_adj"],
+            iv_mean_level=assumptions.iv_mean_level + mc_params["iv_drift_adj"],
+            corr_return_iv=assumptions.corr_return_iv,
+            jump_probability=assumptions.jump_probability * mc_params["jump_prob_adj"],
+            jump_size_mean=assumptions.jump_size_mean,
+            jump_iv_spike=assumptions.jump_iv_spike,
+        )
+        
+        # Run simulation
+        mc = MonteCarloV01(portfolio, assumptions)
+        results = mc.generate_scenarios(n_regime)
+        
+        # Tag results with regime
+        for r in results:
+            r.regime_category = category  # type: ignore
+            r.regime_weight = weight  # type: ignore
+        
+        all_results.extend(results)
+        regime_results[category] = {
+            "weight": weight,
+            "n_scenarios": n_regime,
+            "analysis": mc.analyze_results(results),
+        }
+    
+    # Combined analysis
+    if not all_results:
+        return {"error": "No scenarios generated"}
+    
+    pnls_pct = np.array([r.total_pnl_pct for r in all_results])
+    
+    combined = {
+        "weighted": True,
+        "total_scenarios": len(all_results),
+        "regime_weights": weights,
+        "mean_return_pct": float(np.mean(pnls_pct)),
+        "median_return_pct": float(np.median(pnls_pct)),
+        "std_return_pct": float(np.std(pnls_pct)),
+        "var_95_pct": float(np.percentile(pnls_pct, 5)),
+        "cvar_95_pct": float(np.mean(pnls_pct[pnls_pct <= np.percentile(pnls_pct, 5)])),
+        "win_rate": float(np.mean(pnls_pct > 0)),
+        "regime_breakdown": regime_results,
+    }
+    
+    return combined
