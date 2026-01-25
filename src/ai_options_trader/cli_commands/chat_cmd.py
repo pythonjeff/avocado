@@ -3,10 +3,12 @@ Interactive Research Chat - Continue conversations with the LLM analyst.
 
 Usage:
     lox chat                           # Start fresh with portfolio context
-    lox chat --context fiscal          # Pre-load fiscal snapshot
-    lox chat --context vol             # Pre-load volatility snapshot  
-    lox chat --context macro           # Pre-load macro dashboard
-    lox chat --context regimes         # Pre-load all regime data
+    lox chat -c fiscal                 # Pre-load fiscal snapshot
+    lox chat -c vol                    # Pre-load volatility snapshot  
+    lox chat -c macro                  # Pre-load macro dashboard
+    lox chat -c regimes                # Pre-load all regime data
+    lox chat -c fiscal -c funding      # Multiple contexts
+    lox chat -c fiscal,funding,monetary  # Comma-separated contexts
 
 After the context loads, you can ask follow-up questions like:
     "How does the Trump tariff announcement affect my IWM position?"
@@ -66,13 +68,26 @@ def _get_context_data(context: str, refresh: bool = False) -> tuple[str, dict]:
         
         state = build_volatility_state(settings=settings, start_date="2020-01-01", refresh=refresh)
         regime = classify_volatility_regime(state.inputs)
-        return f"Volatility Regime: {regime.label}", {
+        regime_label = getattr(regime, 'label', None) or getattr(regime, 'name', 'Unknown')
+        
+        # Build snapshot from pydantic model
+        inputs = state.inputs
+        snapshot = {
+            "vix": inputs.vix,
+            "vix_z": inputs.z_vix,
+            "vix_chg_5d_pct": inputs.vix_chg_5d_pct,
+            "term_spread": inputs.vix_term_spread,
+            "persist_20d": inputs.persist_20d,
+            "vol_pressure_score": inputs.vol_pressure_score,
+        }
+        
+        return f"Volatility Regime: {regime_label}", {
             "domain": "volatility",
-            "regime": regime.label,
-            "vix": state.inputs.vix_level,
-            "vix_percentile": state.inputs.vix_pct,
-            "term_spread": state.inputs.term_spread,
-            "snapshot": state.inputs.__dict__ if hasattr(state.inputs, '__dict__') else {},
+            "regime": regime_label,
+            "description": getattr(regime, 'description', ''),
+            "vix": inputs.vix,
+            "vix_z": inputs.z_vix,
+            "snapshot": snapshot,
         }
     
     elif context == "macro":
@@ -86,9 +101,12 @@ def _get_context_data(context: str, refresh: bool = False) -> tuple[str, dict]:
             inflation_momentum_minus_be5y=state.inputs.inflation_momentum_minus_be5y,
             real_yield_proxy_10y=state.inputs.real_yield_proxy_10y,
         )
-        return f"Macro Regime: {regime.label}", {
+        # MacroRegime uses 'name' not 'label'
+        regime_label = getattr(regime, 'label', None) or getattr(regime, 'name', 'Unknown')
+        return f"Macro Regime: {regime_label}", {
             "domain": "macro",
-            "regime": regime.label,
+            "regime": regime_label,
+            "description": getattr(regime, 'description', ''),
             "cpi_yoy": state.inputs.cpi_yoy,
             "snapshot": state.inputs.__dict__ if hasattr(state.inputs, '__dict__') else {},
         }
@@ -148,10 +166,37 @@ def _get_context_data(context: str, refresh: bool = False) -> tuple[str, dict]:
             "snapshot": snapshot_data,
         }
     
+    elif context == "monetary":
+        from ai_options_trader.monetary.signals import build_monetary_page_data
+        from ai_options_trader.monetary.regime import classify_monetary_regime
+        from ai_options_trader.monetary.models import MonetaryInputs
+        
+        data = build_monetary_page_data(settings=settings, lookback_years=5, refresh=refresh)
+        
+        inputs = MonetaryInputs(
+            reserves_level=data.get("reserves_level"),
+            reserves_z_level=data.get("reserves_z_level"),
+            reserves_z_d_4w=data.get("reserves_z_d_4w"),
+            on_rrp_level=data.get("on_rrp_level"),
+            on_rrp_z_level=data.get("on_rrp_z_level"),
+            on_rrp_z_d_4w=data.get("on_rrp_z_d_4w"),
+            fed_bs_level=data.get("fed_bs_level"),
+            fed_bs_z_d_12w=data.get("fed_bs_z_d_12w"),
+            asof=data.get("asof"),
+        )
+        regime = classify_monetary_regime(inputs)
+        
+        return f"Monetary Regime: {regime.label}", {
+            "domain": "monetary",
+            "regime": regime.label,
+            "description": regime.description if hasattr(regime, 'description') else "",
+            "snapshot": data,
+        }
+    
     elif context == "regimes" or context == "all":
         # Load all regimes
         contexts = {}
-        for ctx in ["fiscal", "vol", "macro", "commodities", "rates", "funding"]:
+        for ctx in ["fiscal", "vol", "macro", "commodities", "rates", "funding", "monetary"]:
             try:
                 _, data = _get_context_data(ctx, refresh=refresh)
                 contexts[ctx] = data
@@ -507,12 +552,48 @@ Current date: {datetime.now().strftime('%Y-%m-%d %H:%M')}
     return (resp.choices[0].message.content or "").strip()
 
 
+def _parse_contexts(context_input: list[str]) -> list[str]:
+    """Parse context input which may contain comma-separated values."""
+    contexts = []
+    for c in context_input:
+        # Split by comma and strip whitespace
+        parts = [p.strip().lower() for p in c.split(",") if p.strip()]
+        contexts.extend(parts)
+    return contexts if contexts else ["portfolio"]
+
+
+def _load_multiple_contexts(contexts: list[str], refresh: bool, console: Console) -> tuple[str, dict]:
+    """Load and merge multiple contexts."""
+    if len(contexts) == 1:
+        return _get_context_data(contexts[0], refresh=refresh)
+    
+    # Load multiple contexts
+    merged_data = {"domains": {}}
+    titles = []
+    
+    for ctx in contexts:
+        try:
+            title, data = _get_context_data(ctx, refresh=refresh)
+            titles.append(ctx.capitalize())
+            
+            # Store under domain key
+            domain = data.get("domain", ctx)
+            merged_data["domains"][domain] = data
+            
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load {ctx}: {e}[/yellow]")
+            merged_data["domains"][ctx] = {"error": str(e)}
+    
+    combined_title = " + ".join(titles) + " Context"
+    return combined_title, merged_data
+
+
 @app.command("start")
 def chat_start(
-    context: str = typer.Option(
-        "portfolio",
+    context: list[str] = typer.Option(
+        ["portfolio"],
         "--context", "-c",
-        help="Context to load: fiscal, vol, macro, commodities, rates, funding, regimes, portfolio"
+        help="Context(s) to load: fiscal, vol, macro, commodities, rates, funding, monetary, regimes, portfolio. Use multiple -c flags or comma-separated."
     ),
     refresh: bool = typer.Option(False, "--refresh", help="Force refresh data"),
     model: str = typer.Option("", "--model", "-m", help="Override LLM model"),
@@ -523,8 +604,8 @@ def chat_start(
     Examples:
         lox chat start                      # Portfolio context
         lox chat start -c fiscal            # Fiscal regime context
-        lox chat start -c vol               # Volatility context
-        lox chat start -c regimes           # All regimes
+        lox chat start -c fiscal -c funding # Multiple contexts
+        lox chat start -c fiscal,funding,monetary  # Comma-separated
     """
     console = Console()
     settings = load_settings()
@@ -533,10 +614,12 @@ def chat_start(
         console.print("[red]Error:[/red] OPENAI_API_KEY not set in .env")
         raise typer.Exit(1)
     
-    # Load context
-    console.print(f"\n[cyan]Loading {context} context...[/cyan]")
+    # Parse and load contexts
+    parsed_contexts = _parse_contexts(context)
+    console.print(f"\n[cyan]Loading context(s): {', '.join(parsed_contexts)}...[/cyan]")
+    
     try:
-        title, context_data = _get_context_data(context, refresh=refresh)
+        title, context_data = _load_multiple_contexts(parsed_contexts, refresh, console)
     except Exception as e:
         console.print(f"[red]Error loading context:[/red] {e}")
         raise typer.Exit(1)
@@ -615,10 +698,10 @@ def chat_start(
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    context: str = typer.Option(
-        "portfolio",
+    context: list[str] = typer.Option(
+        ["portfolio"],
         "--context", "-c",
-        help="Context to load: fiscal, vol, macro, commodities, rates, funding, regimes, portfolio"
+        help="Context(s) to load: fiscal, vol, macro, commodities, rates, funding, monetary, regimes, portfolio. Use multiple -c flags or comma-separated."
     ),
     refresh: bool = typer.Option(False, "--refresh", help="Force refresh data"),
     model: str = typer.Option("", "--model", "-m", help="Override LLM model"),
@@ -631,7 +714,8 @@ def main(
     Examples:
         lox chat                           # Portfolio context (default)
         lox chat -c fiscal                 # Fiscal regime context
-        lox chat -c vol                    # Volatility context
+        lox chat -c fiscal -c funding      # Multiple contexts
+        lox chat -c fiscal,funding,monetary  # Comma-separated contexts
         lox chat -c regimes                # All regimes summary
     """
     if ctx.invoked_subcommand is None:

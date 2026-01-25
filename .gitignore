@@ -9,14 +9,21 @@ build/
 .coverage
 htmlcov/
 *.egg-info/
+.DS_Store
+.cursor/
+
+# Data files - cache and live data are gitignored
 data/cache/
+data/live/
 data/tracker.sqlite3
 data/tracker.sqlite3-shm
 data/tracker.sqlite3-wal
-.DS_Store
-.cursor/
-# Keep NAV tracking files, ignore other data CSVs
-data/cache/**/*.csv
+
+# Dashboard cache
+dashboard/data/cache/
+
+# Keep NAV tracking files
 !data/nav_sheet.csv
 !data/nav_investor_flows.csv
 !data/nav_flows.csv
+!data/README.md

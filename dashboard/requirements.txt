@@ -1,10 +1,10 @@
+# Dashboard requirements - uses the main package
+# Install main package first: pip install -e ..
+# Then install these dashboard-specific dependencies
+
+# Web framework
 flask>=3.0.0
 gunicorn>=21.0.0
-python-dotenv>=1.0.0
-pandas>=2.0.0
-requests>=2.31.0
-openai>=1.0.0
-alpaca-py>=0.13.0
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-fredapi>=0.5.0
+
+# Note: Other dependencies (pandas, requests, openai, alpaca-py, pydantic, etc.)
+# are inherited from the main package installation

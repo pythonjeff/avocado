@@ -173,7 +173,7 @@ def fetch_fmp_news(
     articles = []
     
     try:
-        from ai_options_trader.llm.ticker_news import fetch_fmp_stock_news
+        from ai_options_trader.llm.outlooks.ticker_news import fetch_fmp_stock_news
         
         now = datetime.now(timezone.utc)
         from_date = (now - timedelta(days=lookback_days)).date().isoformat()
@@ -207,7 +207,7 @@ def fetch_fmp_news(
     
     # Also fetch general macro news
     try:
-        from ai_options_trader.llm.macro_news import fetch_fmp_general_news
+        from ai_options_trader.llm.outlooks.macro_news import fetch_fmp_general_news
         
         macro_items = fetch_fmp_general_news(settings=settings, max_pages=2)
         

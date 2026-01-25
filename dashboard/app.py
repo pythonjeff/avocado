@@ -1382,7 +1382,7 @@ def _run_monte_carlo_simulation(portfolio, vix_val, hy_val, regime_label, n_scen
     Returns rich metrics including attribution and tail risk analysis.
     """
     import numpy as np
-    from ai_options_trader.llm.monte_carlo_v01 import MonteCarloV01, ScenarioAssumptions
+    from ai_options_trader.llm.scenarios.monte_carlo_v01 import MonteCarloV01, ScenarioAssumptions
     
     # Map dashboard regime to MC regime
     regime_map = {

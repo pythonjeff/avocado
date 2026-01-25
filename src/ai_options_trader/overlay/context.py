@@ -123,8 +123,8 @@ def fetch_news_payload(
     """
     if not settings.fmp_api_key:
         return {}
-    from ai_options_trader.llm.ticker_news import fetch_fmp_stock_news
-    from ai_options_trader.llm.sentiment import rule_based_sentiment
+    from ai_options_trader.llm.outlooks.ticker_news import fetch_fmp_stock_news
+    from ai_options_trader.llm.core.sentiment import rule_based_sentiment
 
     now = datetime.now(timezone.utc)
     from_date = (now - timedelta(days=int(lookback_days))).date().isoformat()
@@ -179,7 +179,7 @@ def fetch_general_news_items(
     """
     if not settings.fmp_api_key:
         return []
-    from ai_options_trader.llm.macro_news import fetch_fmp_general_news
+    from ai_options_trader.llm.outlooks.macro_news import fetch_fmp_general_news
 
     items = fetch_fmp_general_news(settings=settings, max_pages=int(max_pages))
     items = sorted(items, key=lambda x: x.published_at, reverse=True)[: max(0, int(max_items))]

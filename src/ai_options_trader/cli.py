@@ -92,9 +92,6 @@ tariff_app = typer.Typer(add_completion=False, help="Tariff / cost-push regime s
 labs_app.add_typer(tariff_app, name="tariff")
 funding_app = typer.Typer(add_completion=False, help="Funding markets (SOFR, repo spreads) — price of money in daily markets")
 labs_app.add_typer(funding_app, name="funding")
-# Back-compat alias; keep it in labs to avoid clutter.
-liquidity_app = typer.Typer(add_completion=False, help="(deprecated) Alias for funding regime")
-labs_app.add_typer(liquidity_app, name="liquidity")
 usd_app = typer.Typer(add_completion=False, help="USD strength/weakness regime")
 labs_app.add_typer(usd_app, name="usd")
 monetary_app = typer.Typer(add_completion=False, help="Fed liquidity (reserves, balance sheet, RRP) — quantity of money in system")
@@ -125,47 +122,58 @@ def _register_commands() -> None:
     if _COMMANDS_REGISTERED:
         return
     # Import here to keep `ai_options_trader.cli` lightweight at import time.
-    from ai_options_trader.cli_commands.select_cmd import register as register_select
-    from ai_options_trader.cli_commands.macro_cmd import register as register_macro
-    from ai_options_trader.cli_commands.tariff_cmd import register as register_tariff
-    from ai_options_trader.cli_commands.options_cmd import register as register_options
-    from ai_options_trader.cli_commands.options_pick_cmd import register_pick
-    from ai_options_trader.cli_commands.options_scanner_cmd import register_scanners
-    from ai_options_trader.cli_commands.options_moonshot_cmd import register_moonshot
-    from ai_options_trader.cli_commands.funding_cmd import register as register_funding
-    from ai_options_trader.cli_commands.liquidity_cmd import register as register_liquidity
-    from ai_options_trader.cli_commands.usd_cmd import register as register_usd
-    from ai_options_trader.cli_commands.monetary_cmd import register as register_monetary
-    from ai_options_trader.cli_commands.rates_cmd import register as register_rates
-    from ai_options_trader.cli_commands.fiscal_cmd import register as register_fiscal
-    from ai_options_trader.cli_commands.volatility_cmd import register as register_volatility
-    from ai_options_trader.cli_commands.scenarios_cmd import register as register_scenarios
-    from ai_options_trader.cli_commands.scenarios_ml_cmd import register_ml as register_scenarios_ml
-    from ai_options_trader.cli_commands.commodities_cmd import register as register_commodities
-    from ai_options_trader.cli_commands.crypto_cmd import register as register_crypto
-    from ai_options_trader.cli_commands.ticker_cmd import register as register_ticker
-    from ai_options_trader.cli_commands.housing_cmd import register as register_housing
-    from ai_options_trader.cli_commands.solar_cmd import register as register_solar
-    from ai_options_trader.cli_commands.regimes_cmd import register as register_regimes
-    from ai_options_trader.cli_commands.ideas_cmd import register as register_ideas_legacy
-    from ai_options_trader.cli_commands.ideas_clean import register_ideas as register_ideas_clean
-    from ai_options_trader.cli_commands.model_cmd import register_model
-    from ai_options_trader.cli_commands.live_cmd import register as register_live
+    
+    # Core commands
+    from ai_options_trader.cli_commands.core.core_cmd import register_core
+    from ai_options_trader.cli_commands.core.dashboard_cmd import register as register_dashboard
+    from ai_options_trader.cli_commands.core.dashboard_cmd import register_pillar_commands
+    from ai_options_trader.cli_commands.core.nav_cmd import register as register_nav
+    from ai_options_trader.cli_commands.core.account_cmd import register as register_account
+    from ai_options_trader.cli_commands.core.weekly_report_cmd import register as register_weekly_report
+    from ai_options_trader.cli_commands.core.closed_trades_cmd import register as register_closed_trades
+    from ai_options_trader.cli_commands.core.live_cmd import register as register_live
+    from ai_options_trader.cli_commands.core.portfolio_cmd import register as register_portfolio
+    
+    # Regime commands
+    from ai_options_trader.cli_commands.regimes.macro_cmd import register as register_macro
+    from ai_options_trader.cli_commands.regimes.tariff_cmd import register as register_tariff
+    from ai_options_trader.cli_commands.regimes.funding_cmd import register as register_funding
+    from ai_options_trader.cli_commands.regimes.usd_cmd import register as register_usd
+    from ai_options_trader.cli_commands.regimes.monetary_cmd import register as register_monetary
+    from ai_options_trader.cli_commands.regimes.rates_cmd import register as register_rates
+    from ai_options_trader.cli_commands.regimes.fiscal_cmd import register as register_fiscal
+    from ai_options_trader.cli_commands.regimes.volatility_cmd import register as register_volatility
+    from ai_options_trader.cli_commands.regimes.commodities_cmd import register as register_commodities
+    from ai_options_trader.cli_commands.regimes.crypto_cmd import register as register_crypto
+    from ai_options_trader.cli_commands.regimes.housing_cmd import register as register_housing
+    from ai_options_trader.cli_commands.regimes.solar_cmd import register as register_solar
+    from ai_options_trader.cli_commands.regimes.regimes_cmd import register as register_regimes
+    from ai_options_trader.cli_commands.regimes.fedfunds_cmd import register as register_fedfunds
+    
+    # Options commands
+    from ai_options_trader.cli_commands.options.select_cmd import register as register_select
+    from ai_options_trader.cli_commands.options.options_cmd import register as register_options
+    from ai_options_trader.cli_commands.options.options_pick_cmd import register_pick
+    from ai_options_trader.cli_commands.options.options_scanner_cmd import register_scanners
+    from ai_options_trader.cli_commands.options.options_moonshot_cmd import register_moonshot
+    from ai_options_trader.cli_commands.options.options_scan_cmd import register_scan_commands
+    
+    # Analysis commands
+    from ai_options_trader.cli_commands.analysis.scenarios_cmd import register as register_scenarios
+    from ai_options_trader.cli_commands.analysis.scenarios_ml_cmd import register_ml as register_scenarios_ml
+    from ai_options_trader.cli_commands.analysis.model_cmd import register_model
+    from ai_options_trader.cli_commands.analysis.ticker_cmd import register as register_ticker
+    from ai_options_trader.cli_commands.analysis.deep_cmd import register as register_deep
+    from ai_options_trader.cli_commands.analysis.stress_cmd import register_stress
+    
+    # Ideas commands
+    from ai_options_trader.cli_commands.ideas.ideas_cmd import register as register_ideas_legacy
+    from ai_options_trader.cli_commands.ideas.ideas_clean import register_ideas as register_ideas_clean
+    from ai_options_trader.cli_commands.ideas.hedges_cmd import register as register_hedges
+    
+    # Other commands (remain at root)
     from ai_options_trader.cli_commands.track_cmd import register as register_track
-    from ai_options_trader.cli_commands.nav_cmd import register as register_nav
     from ai_options_trader.cli_commands.autopilot_cmd import register as register_autopilot
-    from ai_options_trader.cli_commands.portfolio_cmd import register as register_portfolio
-    from ai_options_trader.cli_commands.account_cmd import register as register_account
-    from ai_options_trader.cli_commands.weekly_report_cmd import register as register_weekly_report
-    from ai_options_trader.cli_commands.fedfunds_cmd import register as register_fedfunds
-    from ai_options_trader.cli_commands.hedges_cmd import register as register_hedges
-    from ai_options_trader.cli_commands.options_scan_cmd import register_scan_commands
-    from ai_options_trader.cli_commands.core_cmd import register_core
-    from ai_options_trader.cli_commands.dashboard_cmd import register as register_dashboard
-    from ai_options_trader.cli_commands.dashboard_cmd import register_pillar_commands
-    from ai_options_trader.cli_commands.closed_trades_cmd import register as register_closed_trades
-    from ai_options_trader.cli_commands.deep_cmd import register as register_deep
-    from ai_options_trader.cli_commands.stress_cmd import register_stress
 
     # Core commands (top-level for quick access)
     register_core(app)
@@ -205,7 +213,6 @@ def _register_commands() -> None:
     register_macro(macro_app)
     register_tariff(tariff_app)
     register_funding(funding_app)
-    register_liquidity(liquidity_app)
     register_usd(usd_app)
     register_monetary(monetary_app)
     register_fedfunds(monetary_app)

@@ -7,6 +7,13 @@ class MacroRegime:
     inflation_trend: str
     real_yield_trend: str
     description: str
+    # Optional display-friendly label (keep `name` stable for programmatic use).
+    label: str | None = None
+    
+    def __post_init__(self):
+        # Auto-generate label from name if not provided
+        if self.label is None:
+            self.label = self.name.replace("_", " ").title()
 
 
 def classify_macro_regime(
