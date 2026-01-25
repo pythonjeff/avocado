@@ -3,6 +3,8 @@ LOX FUND Dashboard
 Flask app for investor-facing P&L dashboard (updates every 5 minutes).
 Palmer analysis is server-cached and refreshes every 30 minutes automatically.
 """
+
+# ============ IMPORTS ============
 from flask import Flask, render_template, jsonify, request
 from datetime import datetime, timezone, timedelta
 import sys
@@ -29,6 +31,18 @@ from ai_options_trader.utils.occ import parse_occ_option_symbol
 import re
 import pandas as pd
 
+# Import refactored modules
+from dashboard.data_fetchers import (
+    get_hy_oas, get_vix, get_10y_yield,
+    get_sp500_return_since_inception, get_btc_return_since_inception,
+)
+from dashboard.regime_utils import get_regime_domains_data, get_regime_label
+from dashboard.news_utils import (
+    fetch_economic_calendar, fetch_earnings_calendar,
+    fetch_earnings_history, fetch_macro_headlines, get_event_source_url,
+)
+
+# ============ FLASK APP SETUP ============
 app = Flask(__name__)
 
 # ============ PALMER CACHE ============
@@ -59,224 +73,7 @@ MC_CACHE_LOCK = threading.Lock()
 MC_REFRESH_INTERVAL = 60 * 60  # 1 hour in seconds
 
 
-def get_hy_oas():
-    """Get HY OAS (credit spreads) - key for HYG puts."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FRED_API_KEY') or not settings.FRED_API_KEY:
-            return None
-        
-        from ai_options_trader.data.fred import FredClient
-        fred = FredClient(api_key=settings.FRED_API_KEY)
-        df = fred.fetch_series(series_id="BAMLH0A0HYM2", start_date="2018-01-01", refresh=False)
-        if df is None or df.empty:
-            return None
-        df = df.sort_values("date")
-        df = df[df["value"].notna()]
-        if df.shape[0] < 2:
-            return None
-        series = pd.Series(df["value"].values, index=pd.to_datetime(df["date"]))
-        last = float(series.iloc[-1])
-        last_bps = last * 100.0  # Convert to bps
-        asof = str(series.index[-1].date())
-        # Target: >325bp for credit stress (HYG puts pay)
-        target = ">325bp"
-        in_range = last_bps >= 325
-        context = "Credit stress → HYG puts pay" if in_range else "Spreads tight → waiting"
-        return {
-            "value": last_bps, 
-            "asof": asof, 
-            "label": "HY OAS", 
-            "unit": "bps",
-            "target": target,
-            "in_range": in_range,
-            "context": context,
-            "description": "High-yield credit spread (ICE BofA Index)"
-        }
-    except Exception:
-        return None
-
-
-def get_vix():
-    """Get VIX level - key for volatility hedges."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return None
-        
-        import requests
-        # Try ^VIX first (CBOE VIX index)
-        url = "https://financialmodelingprep.com/api/v3/quote/%5EVIX"
-        resp = requests.get(url, params={"apikey": settings.FMP_API_KEY}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list) and data and data[0].get("price"):
-            vix_value = float(data[0].get("price", 0))
-            ts = data[0].get("timestamp")
-            asof = "Live"
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    asof = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%H:%M UTC")
-                except:
-                    pass
-            # Target: >20 for volatility hedges to pay
-            target = ">20"
-            in_range = vix_value >= 20
-            context = "Elevated vol → hedges pay" if in_range else "Low vol → hedges wait"
-            return {
-                "value": vix_value, 
-                "asof": asof, 
-                "label": "VIX", 
-                "unit": "",
-                "target": target,
-                "in_range": in_range,
-                "context": context,
-                "description": "CBOE Volatility Index (S&P 500 implied vol)"
-            }
-        return None
-    except Exception as e:
-        print(f"VIX fetch error: {e}")
-        return None
-
-
-def get_sp500_return_since_inception():
-    """Get S&P 500 return since fund inception (Jan 9, 2026) for comparison."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return None
-        
-        import requests
-        
-        # Fund inception date
-        inception_date = "2026-01-09"
-        
-        # Get SPY historical prices
-        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/SPY"
-        resp = requests.get(url, params={
-            "apikey": settings.FMP_API_KEY,
-            "from": inception_date,
-        }, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        if not isinstance(data, dict) or 'historical' not in data:
-            return None
-        
-        historical = data['historical']
-        if not historical or len(historical) < 2:
-            return None
-        
-        # historical is sorted newest first
-        current_price = historical[0].get('close', 0)
-        inception_price = historical[-1].get('close', 0)
-        
-        if inception_price <= 0:
-            return None
-        
-        sp500_return = ((current_price - inception_price) / inception_price) * 100
-        return sp500_return
-    
-    except Exception as e:
-        print(f"S&P 500 return fetch error: {e}")
-        return None
-
-
-def get_btc_return_since_inception():
-    """Get BTC/USD return since fund inception (Jan 9, 2026) for comparison."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return None
-        
-        import requests
-        
-        # Fund inception date
-        inception_date = "2026-01-09"
-        
-        # Get BTC historical prices (using BTCUSD)
-        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/BTCUSD"
-        resp = requests.get(url, params={
-            "apikey": settings.FMP_API_KEY,
-            "from": inception_date,
-        }, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        if not isinstance(data, dict) or 'historical' not in data:
-            return None
-        
-        historical = data['historical']
-        if not historical or len(historical) < 2:
-            return None
-        
-        # historical is sorted newest first
-        current_price = historical[0].get('close', 0)
-        inception_price = historical[-1].get('close', 0)
-        
-        if inception_price <= 0:
-            return None
-        
-        btc_return = ((current_price - inception_price) / inception_price) * 100
-        return btc_return
-    
-    except Exception as e:
-        print(f"BTC return fetch error: {e}")
-        return None
-
-
-def get_10y_yield():
-    """Get 10Y Treasury yield - key for TLT calls. Uses live FMP data."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return None
-        
-        import requests
-        # Use ^TNX for live 10Y yield (CBOE 10Y Treasury Yield Index)
-        url = "https://financialmodelingprep.com/api/v3/quote/%5ETNX"
-        resp = requests.get(url, params={"apikey": settings.FMP_API_KEY}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list) and data and data[0].get("price"):
-            price = float(data[0].get("price", 0))
-            # ^TNX is 10x the yield (e.g., 422.7 -> 4.227%)
-            yield_pct = price / 100.0 if price > 20 else price
-            ts = data[0].get("timestamp")
-            asof = "Live"
-            if ts:
-                try:
-                    from datetime import datetime, timezone
-                    asof = datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%H:%M UTC")
-                except:
-                    pass
-            # Portfolio: Main thesis = persistent inflation, high rates (NVDA puts, HYG puts, VIX)
-            # Hedge: TLT calls pay if inflation comes down, rates fall
-            # Target: >4.5% for main portfolio thesis
-            target = ">4.5% (main) | <4.0% (TLT hedge)"
-            in_range = yield_pct >= 4.5  # Main portfolio thesis playing out
-            if yield_pct >= 4.5:
-                context = "High yields → main portfolio (inflation persistent)"
-            elif yield_pct < 4.0:
-                context = "Yields falling → TLT hedge pays (inflation easing)"
-            else:
-                context = "Yields neutral → mixed signals"
-            return {
-                "value": yield_pct, 
-                "asof": asof, 
-                "label": "10Y Yield", 
-                "unit": "%",
-                "target": target,
-                "in_range": in_range,
-                "context": context,
-                "description": "10-Year Treasury yield (^TNX)"
-            }
-        return None
-    except Exception as e:
-        print(f"10Y yield fetch error: {e}")
-        return None
-
+# ============ QUOTE FETCHING HELPERS ============
 
 def _fetch_option_quote(data_client, symbol: str) -> dict:
     """Fetch bid/ask quote for an option. Returns {'bid': float, 'ask': float} or None."""
@@ -428,6 +225,137 @@ def _simple_position_theory(position):
         return f"{'↑' if is_long else '↓'} Price {'appreciation' if is_long else 'decline'}"
 
 
+# ============ POSITION DATA HELPERS ============
+
+def _get_nav_equity(account):
+    """Get NAV equity from NAV sheet or fallback to account equity."""
+    nav_equity = 0.0
+    try:
+        nav_rows = read_nav_sheet()
+        if nav_rows:
+            nav = nav_rows[-1]
+            nav_equity = float(nav.equity) if hasattr(nav, 'equity') and nav.equity is not None else 0.0
+    except Exception as nav_error:
+        print(f"Warning: Could not read NAV sheet: {nav_error}")
+    
+    # Fallback: calculate from account if NAV sheet is empty
+    if nav_equity == 0.0 and account:
+        try:
+            account_equity = float(getattr(account, 'equity', 0.0) or 0.0)
+            if account_equity > 0:
+                nav_equity = account_equity
+        except Exception:
+            pass
+    
+    return nav_equity
+
+
+def _get_original_capital():
+    """Get original capital from env var or investor flows."""
+    original_capital = float(os.environ.get("FUND_TOTAL_CAPITAL", "0")) or 950.0
+    if original_capital == 950.0:
+        # Try reading from investor flows if env var not set
+        try:
+            flows = read_investor_flows()
+            capital_sum = sum(float(f.amount) for f in flows if float(f.amount) > 0)
+            if capital_sum > 0:
+                original_capital = capital_sum
+        except Exception as flow_error:
+            print(f"Warning: Could not read investor flows: {flow_error}")
+    return original_capital
+
+
+def _get_regime_context(settings):
+    """Get regime context for intelligent theory generation."""
+    try:
+        hy_oas = get_hy_oas(settings)
+        vix = get_vix(settings)
+        yield_10y = get_10y_yield(settings)
+        
+        # Determine regime
+        vix_val = vix.get("value") if vix else None
+        hy_val = hy_oas.get("value") if hy_oas else None
+        regime_label = get_regime_label(vix_val, hy_val)
+        
+        return {
+            "vix": f"{vix_val:.1f}" if vix_val else "N/A",
+            "hy_oas_bps": f"{hy_val:.0f}" if hy_val else "N/A",
+            "yield_10y": f"{yield_10y.get('value'):.2f}%" if yield_10y and yield_10y.get('value') else "N/A",
+            "regime": regime_label,
+        }
+    except Exception as e:
+        print(f"[Positions] Could not fetch regime context: {e}")
+        return {"vix": "N/A", "hy_oas_bps": "N/A", "yield_10y": "N/A", "regime": "UNKNOWN"}
+
+
+def _parse_option_symbol(symbol):
+    """Parse option symbol and return option info dict or None."""
+    try:
+        sym_upper = symbol.upper()
+        # Handle both OCC format and Alpaca format (with /)
+        if '/' in sym_upper:
+            parts = sym_upper.split('/')
+            if len(parts) >= 2:
+                underlying = parts[0]
+                option_part = parts[1]
+                m = re.match(r"^(\d{6})([CP])(\d{8})$", option_part)
+                if m:
+                    exp_str, opt_type_char, strike_str = m.groups()
+                    # Parse date
+                    year = int(exp_str[:2]) + 2000
+                    month = int(exp_str[2:4])
+                    day = int(exp_str[4:6])
+                    from datetime import date
+                    exp = date(year, month, day)
+                    opt_type = 'C' if opt_type_char == 'C' else 'P'
+                    strike = float(strike_str) / 1000.0
+                    return {
+                        "underlying": underlying,
+                        "expiry": str(exp),
+                        "strike": strike,
+                        "opt_type": opt_type,
+                    }
+        else:
+            # Standard OCC format
+            m = re.match(r"^([A-Z]+)(\d{6}[CP]\d{8})$", sym_upper)
+            if m:
+                underlying = m.group(1)
+                exp, opt_type, strike = parse_occ_option_symbol(sym_upper, underlying)
+                # Convert 'call'/'put' to 'C'/'P'
+                opt_type_char = 'C' if opt_type.lower() == 'call' else 'P'
+                return {
+                    "underlying": underlying,
+                    "expiry": str(exp),
+                    "strike": strike,
+                    "opt_type": opt_type_char,
+                }
+    except Exception:
+        pass
+    return None
+
+
+def _get_twr_return():
+    """Get Time-Weighted Return from nav_sheet.csv."""
+    try:
+        nav_sheet_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_sheet.csv")
+        if os.path.exists(nav_sheet_path):
+            import csv
+            with open(nav_sheet_path, "r") as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                if rows:
+                    # Latest TWR cumulative is stored as a decimal (e.g. 0.128 = 12.8%)
+                    latest = rows[-1]
+                    twr_cum = latest.get("twr_cum", "")
+                    if twr_cum:
+                        return float(twr_cum) * 100  # Convert to percentage
+    except Exception as twr_err:
+        print(f"[Positions] Could not read TWR: {twr_err}")
+    return None
+
+
+# ============ DATA FUNCTIONS ============
+
 def get_positions_data():
     """Fetch positions and calculate P&L using conservative bid/ask marking."""
     try:
@@ -436,92 +364,11 @@ def get_positions_data():
         account = trading.get_account()
         positions = trading.get_all_positions()
         
-        # Get NAV from sheet first, fallback to account equity
-        nav_equity = 0.0
-        try:
-            nav_rows = read_nav_sheet()
-            if nav_rows:
-                nav = nav_rows[-1]
-                nav_equity = float(nav.equity) if hasattr(nav, 'equity') and nav.equity is not None else 0.0
-        except Exception as nav_error:
-            print(f"Warning: Could not read NAV sheet: {nav_error}")
-        
-        # #region agent log
-        try:
-            debug_payload = {
-                "sessionId": "debug-session",
-                "runId": "pre-fix",
-                "hypothesisId": "H1",
-                "location": "dashboard/app.py:get_positions_data:nav_read",
-                "message": "NAV sheet and account snapshot",
-                "data": {
-                    "nav_equity": nav_equity,
-                    "has_nav_rows": bool(nav_rows) if "nav_rows" in locals() else False,
-                },
-                "timestamp": int(time.time() * 1000),
-            }
-            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
-                _f.write(json.dumps(debug_payload) + "\n")
-        except Exception:
-            pass
-        # #endregion
-        
-        # Fallback: calculate from account if NAV sheet is empty
-        if nav_equity == 0.0 and account:
-            try:
-                account_equity = float(getattr(account, 'equity', 0.0) or 0.0)
-                if account_equity > 0:
-                    nav_equity = account_equity
-            except Exception:
-                pass
-        
-        # Get original capital from env var (tracks total deposits) or investor flows
-        # FUND_TOTAL_CAPITAL should be updated when deposits/withdrawals occur
-        original_capital = float(os.environ.get("FUND_TOTAL_CAPITAL", "0")) or 950.0
-        if original_capital == 950.0:
-            # Try reading from investor flows if env var not set
-            try:
-                flows = read_investor_flows()
-                capital_sum = sum(float(f.amount) for f in flows if float(f.amount) > 0)
-                if capital_sum > 0:
-                    original_capital = capital_sum
-            except Exception as flow_error:
-                print(f"Warning: Could not read investor flows: {flow_error}")
-        
-        # Total P&L = NAV - original capital
+        # Use helper functions for cleaner code
+        nav_equity = _get_nav_equity(account)
+        original_capital = _get_original_capital()
         total_pnl = nav_equity - original_capital
-        
-        # Get regime context for intelligent theory generation
-        try:
-            hy_oas = get_hy_oas()
-            vix = get_vix()
-            yield_10y = get_10y_yield()
-            
-            # Determine regime
-            vix_val = vix.get("value") if vix else None
-            hy_val = hy_oas.get("value") if hy_oas else None
-            
-            def get_regime_label(vix_val, hy_val):
-                if vix_val is None:
-                    return "UNKNOWN"
-                if vix_val > 25 or (hy_val and hy_val > 400):
-                    return "RISK-OFF"
-                elif vix_val > 18 or (hy_val and hy_val > 350):
-                    return "CAUTIOUS"
-                else:
-                    return "RISK-ON"
-            
-            regime_label = get_regime_label(vix_val, hy_val)
-            
-            regime_context = {
-                "vix": f"{vix_val:.1f}" if vix_val else "N/A",
-                "hy_oas_bps": f"{hy_val:.0f}" if hy_val else "N/A",
-                "yield_10y": f"{yield_10y.get('value'):.2f}%" if yield_10y and yield_10y.get('value') else "N/A",
-                "regime": regime_label,
-            }
-        except Exception as e:
-            print(f"[Positions] Could not fetch regime context: {e}")
-            regime_context = {"vix": "N/A", "hy_oas_bps": "N/A", "yield_10y": "N/A", "regime": "UNKNOWN"}
+        regime_context = _get_regime_context(settings)
         
         positions_list = []
         total_liquidation_value = 0.0
@@ -538,50 +385,8 @@ def get_positions_data():
                 avg_entry = float(getattr(p, "avg_entry_price", 0.0) or 0.0)
                 current_price = float(getattr(p, "current_price", 0.0) or 0.0)
                 
-                # Parse option symbol if needed
-                opt_info = None
-                try:
-                    sym_upper = symbol.upper()
-                    # Handle both OCC format and Alpaca format (with /)
-                    if '/' in sym_upper:
-                        parts = sym_upper.split('/')
-                        if len(parts) >= 2:
-                            underlying = parts[0]
-                            option_part = parts[1]
-                            m = re.match(r"^(\d{6})([CP])(\d{8})$", option_part)
-                            if m:
-                                exp_str, opt_type_char, strike_str = m.groups()
-                                # Parse date
-                                year = int(exp_str[:2]) + 2000
-                                month = int(exp_str[2:4])
-                                day = int(exp_str[4:6])
-                                from datetime import date
-                                exp = date(year, month, day)
-                                opt_type = 'C' if opt_type_char == 'C' else 'P'
-                                strike = float(strike_str) / 1000.0
-                                opt_info = {
-                                    "underlying": underlying,
-                                    "expiry": str(exp),
-                                    "strike": strike,
-                                    "opt_type": opt_type,
-                                }
-                    else:
-                        # Standard OCC format
-                        m = re.match(r"^([A-Z]+)(\d{6}[CP]\d{8})$", sym_upper)
-                        if m:
-                            underlying = m.group(1)
-                            exp, opt_type, strike = parse_occ_option_symbol(sym_upper, underlying)
-                            # Convert 'call'/'put' to 'C'/'P'
-                            opt_type_char = 'C' if opt_type.lower() == 'call' else 'P'
-                            opt_info = {
-                                "underlying": underlying,
-                                "expiry": str(exp),
-                                "strike": strike,
-                                "opt_type": opt_type_char,
-                            }
-                except Exception as parse_err:
-                    # Skip option parsing errors, continue with symbol only
-                    pass
+                # Parse option symbol using helper function
+                opt_info = _parse_option_symbol(symbol)
                 
                 # Fetch real bid/ask quote for conservative marking
                 quote = None
@@ -658,47 +463,8 @@ def get_positions_data():
         # instead of only when the NAV sheet CSV is updated.
         simple_return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
         
-        # Optionally also load TWR (Time-Weighted Return) from nav_sheet for reference.
-        # This is exposed separately so it can be used for reports without
-        # interfering with the live dashboard behaviour.
-        twr_pct = None
-        try:
-            nav_sheet_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_sheet.csv")
-            if os.path.exists(nav_sheet_path):
-                import csv
-                with open(nav_sheet_path, "r") as f:
-                    reader = csv.DictReader(f)
-                    rows = list(reader)
-                    if rows:
-                        # Latest TWR cumulative is stored as a decimal (e.g. 0.128 = 12.8%)
-                        latest = rows[-1]
-                        twr_cum = latest.get("twr_cum", "")
-                        if twr_cum:
-                            twr_pct = float(twr_cum) * 100  # Convert to percentage
-        except Exception as twr_err:
-            print(f"[Positions] Could not read TWR: {twr_err}")
-        
-        # #region agent log
-        try:
-            debug_payload = {
-                "sessionId": "debug-session",
-                "runId": "pre-fix",
-                "hypothesisId": "H1",
-                "location": "dashboard/app.py:get_positions_data:twr_block",
-                "message": "TWR and liquidation metrics",
-                "data": {
-                    "twr_pct": twr_pct,
-                    "liquidation_nav": liquidation_nav,
-                    "liquidation_pnl": liquidation_pnl,
-                    "original_capital": original_capital,
-                },
-                "timestamp": int(time.time() * 1000),
-            }
-            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
-                _f.write(json.dumps(debug_payload) + "\n")
-        except Exception:
-            pass
-        # #endregion
+        # Load TWR (Time-Weighted Return) using helper function
+        twr_pct = _get_twr_return()
         
         # Use TWR (time-weighted return) for headline - industry standard for hedge funds (GIPS compliant).
         # Fall back to simple return only if TWR isn't available.
@@ -707,30 +473,10 @@ def get_positions_data():
         else:
             return_pct = simple_return_pct
         
-        # #region agent log
-        try:
-            debug_payload = {
-                "sessionId": "debug-session",
-                "runId": "pre-fix",
-                "hypothesisId": "H1",
-                "location": "dashboard/app.py:get_positions_data:return_calc",
-                "message": "Final return calculation",
-                "data": {
-                    "simple_return_pct": simple_return_pct,
-                    "twr_pct": twr_pct,
-                    "return_pct": return_pct,
-                },
-                "timestamp": int(time.time() * 1000),
-            }
-            with open("/Users/jeffreylarson/sites/ai-options-trader-starter/.cursor/debug.log", "a") as _f:
-                _f.write(json.dumps(debug_payload) + "\n")
-        except Exception:
-            pass
-        # #endregion
         
         # Get benchmark performance since inception for comparison
-        sp500_return = get_sp500_return_since_inception()
-        btc_return = get_btc_return_since_inception()
+        sp500_return = get_sp500_return_since_inception(settings)
+        btc_return = get_btc_return_since_inception(settings)
         alpha_sp500 = return_pct - sp500_return if sp500_return is not None else None
         alpha_btc = return_pct - btc_return if btc_return is not None else None
         
@@ -787,6 +533,8 @@ def get_positions_data():
         }
 
 
+# ============ FLASK ROUTES ============
+
 @app.route('/')
 def index():
     """Main dashboard page."""
@@ -815,168 +563,12 @@ def api_closed_trades():
 def api_regime_domains():
     """API endpoint for regime domain indicators (funding, USD, commodities, etc.)."""
     try:
-        return jsonify(get_regime_domains_data())
+        settings = load_settings()
+        return jsonify(get_regime_domains_data(settings))
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e), "domains": {}})
-
-
-def get_regime_domains_data():
-    """Fetch regime status for each domain using available modules."""
-    domains = {}
-    
-    try:
-        settings = load_settings()
-    except Exception:
-        return {"domains": domains, "error": "Settings not available"}
-    
-    # Funding regime
-    try:
-        from ai_options_trader.funding.signals import build_funding_state
-        from ai_options_trader.funding.regime import classify_funding_regime
-        
-        state = build_funding_state(settings=settings, start_date="2020-01-01", refresh=False)
-        regime = classify_funding_regime(state.inputs)
-        label = regime.label or regime.name
-        color = "green" if "normal" in label.lower() or "easy" in label.lower() or "benign" in label.lower() else \
-                "red" if "stress" in label.lower() or "tight" in label.lower() or "crisis" in label.lower() else "yellow"
-        domains["funding"] = {"label": label.upper(), "color": color}
-    except Exception as e:
-        print(f"[Regimes] Funding error: {e}")
-        domains["funding"] = {"label": "N/A", "color": "gray"}
-    
-    # USD regime (derived from DXY via FMP if available)
-    try:
-        import requests
-        # Get DXY (Dollar Index) for USD strength
-        if settings.FMP_API_KEY:
-            url = f"https://financialmodelingprep.com/api/v3/quote/DX-Y.NYB"
-            resp = requests.get(url, params={"apikey": settings.FMP_API_KEY}, timeout=10)
-            data = resp.json()
-            if isinstance(data, list) and data:
-                dxy = data[0].get("price", 0)
-                change_pct = data[0].get("changesPercentage", 0)
-                # DXY > 105 = strong, < 100 = weak
-                if dxy > 105:
-                    label = "STRONG"
-                    color = "red"  # Strong USD bearish for risk
-                elif dxy < 100:
-                    label = "WEAK"
-                    color = "green"  # Weak USD bullish for risk
-                else:
-                    label = "NEUTRAL"
-                    color = "yellow"
-                domains["usd"] = {"label": f"{label} ({dxy:.1f})", "color": color}
-            else:
-                domains["usd"] = {"label": "N/A", "color": "gray"}
-        else:
-            domains["usd"] = {"label": "N/A", "color": "gray"}
-    except Exception as e:
-        print(f"[Regimes] USD error: {e}")
-        domains["usd"] = {"label": "N/A", "color": "gray"}
-    
-    # Commodities regime
-    try:
-        from ai_options_trader.commodities.signals import build_commodities_state
-        from ai_options_trader.commodities.regime import classify_commodities_regime
-        
-        state = build_commodities_state(settings=settings, start_date="2020-01-01", refresh=False)
-        regime = classify_commodities_regime(state.inputs)
-        label = regime.label or regime.name
-        color = "red" if "spike" in label.lower() or "surge" in label.lower() or "inflation" in label.lower() else \
-                "green" if "calm" in label.lower() or "stable" in label.lower() or "deflation" in label.lower() else "yellow"
-        domains["commod"] = {"label": label.upper(), "color": color}
-    except Exception as e:
-        print(f"[Regimes] Commodities error: {e}")
-        domains["commod"] = {"label": "N/A", "color": "gray"}
-    
-    # Volatility regime
-    try:
-        from ai_options_trader.volatility.signals import build_volatility_state
-        from ai_options_trader.volatility.regime import classify_volatility_regime
-        
-        state = build_volatility_state(settings=settings, start_date="2020-01-01", refresh=False)
-        regime = classify_volatility_regime(state.inputs)
-        label = regime.label or regime.name
-        color = "green" if "low" in label.lower() or "calm" in label.lower() or "complacent" in label.lower() else \
-                "red" if "high" in label.lower() or "stress" in label.lower() or "spike" in label.lower() or "crisis" in label.lower() else "yellow"
-        domains["volatility"] = {"label": label.upper(), "color": color}
-    except Exception as e:
-        print(f"[Regimes] Volatility error: {e}")
-        domains["volatility"] = {"label": "N/A", "color": "gray"}
-    
-    # Housing regime
-    try:
-        from ai_options_trader.housing.signals import build_housing_state
-        from ai_options_trader.housing.regime import classify_housing_regime
-        
-        state = build_housing_state(settings=settings, start_date="2020-01-01", refresh=False)
-        regime = classify_housing_regime(state.inputs)
-        label = regime.label or "unknown"
-        
-        # If unknown, derive from mortgage spread
-        if label.lower() == "unknown" and state.inputs.mortgage_spread is not None:
-            spread = state.inputs.mortgage_spread
-            # Mortgage spread typical range: 1.5-2.5%, stress >3%
-            if spread > 2.5:
-                label = f"STRESSED ({spread:.1f}%)"
-                color = "red"
-            elif spread < 1.8:
-                label = f"HEALTHY ({spread:.1f}%)"
-                color = "green"
-            else:
-                label = f"NORMAL ({spread:.1f}%)"
-                color = "yellow"
-        else:
-            color = "red" if "stress" in label.lower() or "weak" in label.lower() or "crisis" in label.lower() else \
-                    "green" if "healthy" in label.lower() or "strong" in label.lower() or "normal" in label.lower() else "yellow"
-            label = label.upper()
-        
-        domains["housing"] = {"label": label, "color": color}
-    except Exception as e:
-        print(f"[Regimes] Housing error: {e}")
-        domains["housing"] = {"label": "N/A", "color": "gray"}
-    
-    # Crypto regime (derived from BTC price action)
-    try:
-        import requests
-        if settings.FMP_API_KEY:
-            url = f"https://financialmodelingprep.com/api/v3/quote/BTCUSD"
-            resp = requests.get(url, params={"apikey": settings.FMP_API_KEY}, timeout=10)
-            data = resp.json()
-            if isinstance(data, list) and data:
-                btc_price = data[0].get("price", 0)
-                change_pct = data[0].get("changesPercentage", 0)
-                # Simple momentum-based regime
-                if change_pct > 3:
-                    label = "RALLY"
-                    color = "green"
-                elif change_pct < -3:
-                    label = "SELLOFF"
-                    color = "red"
-                elif btc_price > 90000:
-                    label = "BULLISH"
-                    color = "green"
-                elif btc_price < 50000:
-                    label = "BEARISH"
-                    color = "red"
-                else:
-                    label = "RANGE"
-                    color = "yellow"
-                domains["crypto"] = {"label": f"{label} (${btc_price/1000:.0f}K)", "color": color}
-            else:
-                domains["crypto"] = {"label": "N/A", "color": "gray"}
-        else:
-            domains["crypto"] = {"label": "N/A", "color": "gray"}
-    except Exception as e:
-        print(f"[Regimes] Crypto error: {e}")
-        domains["crypto"] = {"label": "N/A", "color": "gray"}
-    
-    return {
-        "domains": domains,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 @app.route('/api/investors')
@@ -1277,351 +869,6 @@ def _parse_option_symbol_display(sym: str) -> str:
     return sym
 
 
-def fetch_economic_calendar(days_back=3, days_ahead=7):
-    """Fetch recent and upcoming economic events from FMP."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return [], []
-        
-        import requests
-        url = "https://financialmodelingprep.com/api/v3/economic_calendar"
-        resp = requests.get(url, params={"apikey": settings.FMP_API_KEY}, timeout=15)
-        resp.raise_for_status()
-        events = resp.json()
-        
-        if not isinstance(events, list):
-            return [], []
-        
-        now = datetime.now(timezone.utc)
-        past_cutoff = now - timedelta(days=days_back)
-        future_cutoff = now + timedelta(days=days_ahead)
-        
-        recent_releases = []
-        upcoming_events = []
-        
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            
-            # Parse date
-            event_date_str = event.get("date", "").replace(" ", "T")
-            try:
-                event_date = datetime.fromisoformat(event_date_str).replace(tzinfo=timezone.utc)
-            except:
-                try:
-                    event_date = datetime.strptime(event_date_str.split("T")[0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-                except:
-                    continue
-            
-            # Only US events
-            country = event.get("country", "").upper()
-            if country and country != "US":
-                continue
-            
-            event_name = event.get("event", "")
-            actual = event.get("actual")
-            estimate = event.get("estimate")
-            previous = event.get("previous")
-            
-            # Recent releases (with actual values)
-            if past_cutoff <= event_date <= now and actual is not None:
-                surprise = None
-                if estimate is not None and actual is not None:
-                    try:
-                        surprise = float(actual) - float(estimate)
-                    except:
-                        pass
-                
-                recent_releases.append({
-                    "date": event_date.strftime("%Y-%m-%d"),
-                    "event": event_name,
-                    "actual": actual,
-                    "estimate": estimate,
-                    "previous": previous,
-                    "surprise": surprise,
-                })
-            
-            # Upcoming events
-            elif now < event_date <= future_cutoff:
-                upcoming_events.append({
-                    "date": event_date.strftime("%Y-%m-%d %H:%M"),
-                    "event": event_name,
-                    "estimate": estimate,
-                    "previous": previous,
-                })
-        
-        # Sort and limit
-        recent_releases.sort(key=lambda x: x["date"], reverse=True)
-        upcoming_events.sort(key=lambda x: x["date"])
-        
-        return recent_releases[:10], upcoming_events[:8]
-    
-    except Exception as e:
-        print(f"Economic calendar fetch error: {e}")
-        return [], []
-
-
-def fetch_earnings_history(symbol, api_key, num_quarters=4):
-    """Fetch historical earnings surprises for a ticker from FMP."""
-    try:
-        import requests
-        url = f"https://financialmodelingprep.com/api/v3/earnings-surprises/{symbol}"
-        resp = requests.get(url, params={"apikey": api_key}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        if not isinstance(data, list) or not data:
-            return None
-        
-        # Get last N quarters
-        recent = data[:num_quarters]
-        
-        beats = 0
-        misses = 0
-        meets = 0
-        
-        for q in recent:
-            actual = q.get("actualEarningResult")
-            estimate = q.get("estimatedEarning")
-            if actual is not None and estimate is not None:
-                try:
-                    diff = float(actual) - float(estimate)
-                    if diff > 0.01:
-                        beats += 1
-                    elif diff < -0.01:
-                        misses += 1
-                    else:
-                        meets += 1
-                except:
-                    pass
-        
-        total = beats + misses + meets
-        if total == 0:
-            return None
-        
-        return {
-            "beats": beats,
-            "misses": misses,
-            "meets": meets,
-            "total": total,
-            "beat_rate": round(beats / total * 100),
-            "miss_rate": round(misses / total * 100),
-        }
-    except Exception as e:
-        print(f"Earnings history fetch error for {symbol}: {e}")
-        return None
-
-
-def fetch_earnings_calendar(tickers, days_ahead=14):
-    """Fetch upcoming earnings for specified tickers from FMP with historical beat/miss data."""
-    try:
-        settings = load_settings()
-        if not settings or not hasattr(settings, 'FMP_API_KEY') or not settings.FMP_API_KEY:
-            return []
-        
-        import requests
-        
-        # ETF holdings mapping - key components that matter for our thesis
-        etf_holdings = {
-            "TAN": ["ENPH", "SEDG", "FSLR", "RUN", "CSIQ", "JKS"],  # Solar stocks
-            "HYG": [],  # Bond ETF - no individual earnings
-            "TLT": [],  # Treasury ETF - no individual earnings
-            "VIXM": [],  # VIX futures ETF - no individual earnings
-            "GLDM": [],  # Gold ETF - no individual earnings
-        }
-        
-        # Expand tickers to include ETF holdings
-        all_tickers = set()
-        for ticker in tickers:
-            # Clean ticker (remove option suffixes)
-            base_ticker = ticker.split()[0] if ' ' in ticker else ticker
-            # Remove any numbers (strike prices)
-            base_ticker = ''.join([c for c in base_ticker if not c.isdigit()]).strip()
-            
-            if base_ticker in etf_holdings:
-                all_tickers.update(etf_holdings[base_ticker])
-            else:
-                all_tickers.add(base_ticker)
-        
-        if not all_tickers:
-            return []
-        
-        # Get earnings calendar from FMP
-        now = datetime.now(timezone.utc)
-        from_date = now.strftime("%Y-%m-%d")
-        to_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        
-        url = "https://financialmodelingprep.com/api/v3/earning_calendar"
-        resp = requests.get(url, params={
-            "apikey": settings.FMP_API_KEY,
-            "from": from_date,
-            "to": to_date,
-        }, timeout=15)
-        resp.raise_for_status()
-        earnings = resp.json()
-        
-        if not isinstance(earnings, list):
-            return []
-        
-        # Filter for our tickers and enrich with historical data
-        relevant_earnings = []
-        for e in earnings:
-            symbol = e.get("symbol", "").upper()
-            if symbol in [t.upper() for t in all_tickers]:
-                # Get historical beat/miss data
-                history = fetch_earnings_history(symbol, settings.FMP_API_KEY, num_quarters=4)
-                
-                relevant_earnings.append({
-                    "date": e.get("date", ""),
-                    "symbol": symbol,
-                    "time": e.get("time", ""),  # "bmo" (before market open) or "amc" (after market close)
-                    "eps_estimate": e.get("epsEstimated"),
-                    "revenue_estimate": e.get("revenueEstimated"),
-                    "history": history,  # Beat/miss history
-                })
-        
-        # Sort by date
-        relevant_earnings.sort(key=lambda x: x["date"])
-        
-        return relevant_earnings
-    
-    except Exception as e:
-        print(f"Earnings calendar fetch error: {e}")
-        return []
-
-
-def fetch_macro_headlines(settings, portfolio_tickers=None, limit=3):
-    """Fetch headlines ONLY for portfolio tickers - top 3 most relevant."""
-    import requests
-    from zoneinfo import ZoneInfo
-    headlines = []
-    
-    try:
-        if not portfolio_tickers:
-            return headlines
-        
-        # Filter to clean underlying tickers only
-        clean_tickers = list(set([
-            t.upper() for t in portfolio_tickers 
-            if t and len(t) <= 5 and t.isalpha() and t.upper() not in ['C', 'P']
-        ]))
-        
-        if not clean_tickers:
-            return headlines
-        
-        # Fetch from FMP stock news - portfolio tickers ONLY
-        tickers_str = ",".join(clean_tickers[:8])
-        url = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={tickers_str}&limit={limit * 3}&apikey={settings.fmp_api_key}"
-        
-        resp = requests.get(url, timeout=10)
-        data = resp.json()
-        
-        if isinstance(data, list):
-            now = datetime.now(timezone.utc)
-            for item in data:
-                title = item.get("title", "") or ""
-                site = item.get("site", "") or ""
-                published = item.get("publishedDate", "") or ""
-                ticker = item.get("symbol", "") or ""
-                news_url = item.get("url", "") or ""
-                
-                if not title:
-                    continue
-                
-                # Parse date and show relative time
-                time_str = ""
-                if published:
-                    try:
-                        dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                        diff = now - dt
-                        hours = diff.total_seconds() / 3600
-                        if hours < 1:
-                            time_str = f"{int(diff.total_seconds() / 60)}m ago"
-                        elif hours < 24:
-                            time_str = f"{int(hours)}h ago"
-                        else:
-                            time_str = dt.strftime("%b %d")
-                    except:
-                        pass
-                
-                headlines.append({
-                    "headline": title[:100],
-                    "source": site[:15] if site else "News",
-                    "time": time_str,
-                    "ticker": ticker,
-                    "url": news_url,
-                })
-        
-        # Dedupe by headline
-        seen = set()
-        unique_headlines = []
-        for h in headlines:
-            key = h["headline"][:50].lower()
-            if key not in seen:
-                seen.add(key)
-                unique_headlines.append(h)
-        
-        headlines = unique_headlines[:limit]
-        
-    except Exception as e:
-        print(f"[Palmer] Headlines error: {e}")
-    
-    return headlines
-
-
-def _get_event_source_url(event_name: str) -> str:
-    """Map economic event names to authoritative source URLs."""
-    event_lower = event_name.lower()
-    
-    # Federal Reserve / FOMC
-    if any(kw in event_lower for kw in ['fomc', 'fed ', 'federal reserve', 'powell', 'rate decision']):
-        return "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-    
-    # Treasury / Auctions
-    if any(kw in event_lower for kw in ['treasury', 'auction', 't-bill', 't-bond', 't-note']):
-        return "https://www.treasurydirect.gov/auctions/upcoming/"
-    
-    # Employment / Jobs (BLS)
-    if any(kw in event_lower for kw in ['payroll', 'employment', 'unemployment', 'jobless', 'nonfarm', 'jobs']):
-        return "https://www.bls.gov/news.release/empsit.toc.htm"
-    
-    # Inflation - CPI (BLS)
-    if 'cpi' in event_lower or 'consumer price' in event_lower:
-        return "https://www.bls.gov/cpi/"
-    
-    # Inflation - PCE (BEA)
-    if 'pce' in event_lower or 'personal consumption' in event_lower:
-        return "https://www.bea.gov/data/personal-consumption-expenditures-price-index"
-    
-    # GDP (BEA)
-    if 'gdp' in event_lower or 'gross domestic' in event_lower:
-        return "https://www.bea.gov/data/gdp/gross-domestic-product"
-    
-    # Retail Sales (Census)
-    if 'retail' in event_lower:
-        return "https://www.census.gov/retail/index.html"
-    
-    # Housing (Census)
-    if any(kw in event_lower for kw in ['housing', 'home sales', 'building permits', 'housing starts']):
-        return "https://www.census.gov/construction/nrc/index.html"
-    
-    # ISM / PMI
-    if any(kw in event_lower for kw in ['ism', 'pmi', 'manufacturing index', 'services index']):
-        return "https://www.ismworld.org/supply-management-news-and-reports/reports/ism-report-on-business/"
-    
-    # Durable Goods (Census)
-    if 'durable' in event_lower:
-        return "https://www.census.gov/manufacturing/m3/index.html"
-    
-    # Consumer Confidence (Conference Board)
-    if 'consumer confidence' in event_lower or 'consumer sentiment' in event_lower:
-        return "https://www.conference-board.org/topics/consumer-confidence"
-    
-    # Default: Trading Economics calendar
-    return "https://tradingeconomics.com/united-states/calendar"
-
-
 def fetch_trading_economics_calendar(api_key, today_str):
     """Try Trading Economics API first - better timezone handling."""
     import requests
@@ -1801,7 +1048,7 @@ def fetch_fed_fiscal_calendar(settings):
                     "previous": previous,
                     "estimate": estimate,
                     "surprise_direction": surprise_direction,
-                    "url": _get_event_source_url(event_name),
+                    "url": get_event_source_url(event_name),
                 })
         
         # Sort by time
@@ -1857,6 +1104,8 @@ def _describe_portfolio(positions):
     
     return "; ".join(desc_parts) if desc_parts else "No clear directional exposure"
 
+
+# ============ ANALYSIS FUNCTIONS ============
 
 def _categorize_portfolio_positions(positions):
     """
@@ -2256,23 +1505,13 @@ def _refresh_mc_cache():
     print(f"[MC] Refreshing simulation at {datetime.now(timezone.utc).isoformat()}")
     
     try:
+        settings = load_settings()
+        
         # Get current regime data
-        vix = get_vix()
-        hy_oas = get_hy_oas()
+        vix = get_vix(settings)
+        hy_oas = get_hy_oas(settings)
         vix_val = vix.get("value") if vix else None
         hy_val = hy_oas.get("value") if hy_oas else None
-        
-        # Determine regime
-        def get_regime_label(vix_val, hy_val):
-            if vix_val is None:
-                return "UNKNOWN"
-            if vix_val > 25 or (hy_val and hy_val > 400):
-                return "RISK-OFF"
-            elif vix_val > 18 or (hy_val and hy_val > 350):
-                return "CAUTIOUS"
-            else:
-                return "RISK-ON"
-        
         regime_label = get_regime_label(vix_val, hy_val)
         
         # Get positions data
@@ -2310,6 +1549,146 @@ def _mc_background_refresh():
             time.sleep(60)  # Wait a minute before retrying
 
 
+# ============ TRAFFIC LIGHT STATUS HELPERS ============
+
+def _get_regime_status(vix_val, hy_val):
+    """Determine overall market regime based on VIX and HY spreads."""
+    if vix_val is None:
+        return "UNKNOWN", "gray"
+    if vix_val > 25 or (hy_val and hy_val > 400):
+        return "RISK-OFF", "red"
+    elif vix_val > 18 or (hy_val and hy_val > 350):
+        return "CAUTIOUS", "yellow"
+    else:
+        return "RISK-ON", "green"
+
+
+def _get_vol_status(vix_val):
+    """Determine volatility status based on VIX level."""
+    if vix_val is None:
+        return "UNKNOWN", "gray"
+    if vix_val > 25:
+        return "ELEVATED", "red"
+    elif vix_val > 18:
+        return "MODERATE", "yellow"
+    else:
+        return "LOW", "green"
+
+
+def _get_credit_status(hy_val):
+    """Determine credit market status based on HY spreads."""
+    if hy_val is None:
+        return "UNKNOWN", "gray"
+    if hy_val > 400:
+        return "STRESSED", "red"
+    elif hy_val > 325:
+        return "WATCHING", "yellow"
+    else:
+        return "STABLE", "green"
+
+
+def _get_rates_status(yield_val):
+    """
+    Determine rates status based on 10Y yield.
+    
+    10Y context (post-2008 avg ~2%, pre-2008 ~4.5%):
+    - < 3.5%: LOW (dovish, unusual in current regime)
+    - 3.5-4.0%: MODERATE (transition zone)
+    - 4.0-4.5%: ELEVATED (restrictive, current zone)
+    - > 4.5%: HIGH (very restrictive, approaching 2023 peaks)
+    """
+    if yield_val is None:
+        return "UNKNOWN", "gray"
+    if yield_val > 4.5:
+        return "HIGH", "red"
+    elif yield_val > 4.0:
+        return "ELEVATED", "yellow"
+    elif yield_val > 3.5:
+        return "MODERATE", "green"
+    else:
+        return "LOW", "green"
+
+
+def _build_vix_context(vix_val):
+    """Build quantitative VIX context string for analysis."""
+    if not vix_val:
+        return ""
+    if vix_val < 14:
+        return f"VIX at {vix_val:.1f} (5th-15th percentile) — implied vol compressed, hedges cheap but portfolio vol positions face theta decay"
+    elif vix_val < 18:
+        return f"VIX at {vix_val:.1f} (25th-45th percentile) — normal regime, balanced convexity vs carry trade-off"
+    elif vix_val < 22:
+        return f"VIX at {vix_val:.1f} (50th-70th percentile) — elevated regime, event risk priced, vol positions approaching profitability zone"
+    elif vix_val < 28:
+        return f"VIX at {vix_val:.1f} (75th-90th percentile) — stressed regime, term structure likely inverted, vol positions should be delta-hedging"
+    else:
+        return f"VIX at {vix_val:.1f} (>90th percentile) — crisis regime, vol positions at max vega, consider rolling strikes"
+
+
+def _build_hy_context(hy_val):
+    """Build quantitative HY spread context string for analysis."""
+    if not hy_val:
+        return ""
+    if hy_val < 300:
+        return f"HY OAS at {hy_val:.0f}bp (tight) — credit risk underpriced, HYG put holders waiting for catalyst"
+    elif hy_val < 350:
+        return f"HY OAS at {hy_val:.0f}bp (normal) — credit benign but tightening cycle mature, watching for spread decompression"
+    elif hy_val < 450:
+        return f"HY OAS at {hy_val:.0f}bp (widening) — early stress signals, HYG put deltas expanding, equity-credit correlation rising"
+    else:
+        return f"HY OAS at {hy_val:.0f}bp (stressed) — credit dislocation, HYG puts deep ITM, contagion risk to equity"
+
+
+def _build_rates_context(yield_val):
+    """Build quantitative rates context string for analysis."""
+    if not yield_val:
+        return ""
+    if yield_val < 3.5:
+        return f"10Y at {yield_val:.2f}% (dovish) — duration tailwind, TLT calls profitable, growth outperforming value"
+    elif yield_val < 4.2:
+        return f"10Y at {yield_val:.2f}% (neutral) — Fed at terminal, duration-sensitive plays range-bound"
+    elif yield_val < 4.7:
+        return f"10Y at {yield_val:.2f}% (restrictive) — term premium rebuilding, growth/tech equity multiples under pressure"
+    else:
+        return f"10Y at {yield_val:.2f}% (hawkish extreme) — fiscal supply pressure, equity multiple compression accelerating"
+
+
+def _build_scenario_impacts(scenario_matrix):
+    """Build scenario impact descriptions from the scenario matrix."""
+    impacts = []
+    
+    # Risk-off scenario
+    risk_off_winners = scenario_matrix.get("risk_off_spike", {}).get("winners", [])
+    risk_off_losers = scenario_matrix.get("risk_off_spike", {}).get("losers", [])
+    if risk_off_winners or risk_off_losers:
+        impact = "RISK-OFF SPIKE (VIX +10, SPX -10%): "
+        parts = []
+        if risk_off_winners:
+            parts.append(f"Winners: {', '.join(list(set(risk_off_winners))[:3])}")
+        if risk_off_losers:
+            parts.append(f"Losers: {', '.join(list(set(risk_off_losers))[:3])}")
+        impacts.append(impact + " | ".join(parts))
+    
+    # Goldilocks rally
+    rally_winners = scenario_matrix.get("goldilocks_rally", {}).get("winners", [])
+    rally_losers = scenario_matrix.get("goldilocks_rally", {}).get("losers", [])
+    if rally_winners or rally_losers:
+        impact = "GOLDILOCKS RALLY (VIX -5, SPX +5%): "
+        parts = []
+        if rally_winners:
+            parts.append(f"Winners: {', '.join(list(set(rally_winners))[:3])}")
+        if rally_losers:
+            parts.append(f"Losers: {', '.join(list(set(rally_losers))[:3])}")
+        impacts.append(impact + " | ".join(parts))
+    
+    # Credit stress
+    credit_winners = scenario_matrix.get("credit_stress", {}).get("winners", [])
+    if credit_winners:
+        impacts.append(f"CREDIT STRESS (HY +150bp): Winners: {', '.join(list(set(credit_winners))[:3])}")
+    
+    return impacts
+
+
 def _generate_palmer_analysis():
     """Internal function to generate Palmer's analysis (called by cache refresh)."""
     try:
@@ -2322,9 +1701,9 @@ def _generate_palmer_analysis():
         return {"error": "OpenAI API key not configured", "analysis": None}
     
     # Get current macro data
-    hy_oas = get_hy_oas()
-    vix = get_vix()
-    yield_10y = get_10y_yield()
+    hy_oas = get_hy_oas(settings)
+    vix = get_vix(settings)
+    yield_10y = get_10y_yield(settings)
     
     # Get today's economic calendar
     fed_fiscal_events, calendar_date = fetch_fed_fiscal_calendar(settings)
@@ -2353,64 +1732,15 @@ def _generate_palmer_analysis():
         "portfolio_pnl": positions_data.get("total_pnl"),
     }
     
-    # Determine traffic light statuses
-    def get_regime_status(vix_val, hy_val):
-        if vix_val is None:
-            return "UNKNOWN", "gray"
-        if vix_val > 25 or (hy_val and hy_val > 400):
-            return "RISK-OFF", "red"
-        elif vix_val > 18 or (hy_val and hy_val > 350):
-            return "CAUTIOUS", "yellow"
-        else:
-            return "RISK-ON", "green"
-    
-    def get_vol_status(vix_val):
-        if vix_val is None:
-            return "UNKNOWN", "gray"
-        if vix_val > 25:
-            return "ELEVATED", "red"
-        elif vix_val > 18:
-            return "MODERATE", "yellow"
-        else:
-            return "LOW", "green"
-    
-    def get_credit_status(hy_val):
-        if hy_val is None:
-            return "UNKNOWN", "gray"
-        if hy_val > 400:
-            return "STRESSED", "red"
-        elif hy_val > 325:
-            return "WATCHING", "yellow"
-        else:
-            return "STABLE", "green"
-    
-    def get_rates_status(yield_val):
-        """
-        10Y context (post-2008 avg ~2%, pre-2008 ~4.5%):
-        - < 3.5%: LOW (dovish, unusual in current regime)
-        - 3.5-4.0%: MODERATE (transition zone)
-        - 4.0-4.5%: ELEVATED (restrictive, current zone)
-        - > 4.5%: HIGH (very restrictive, approaching 2023 peaks)
-        """
-        if yield_val is None:
-            return "UNKNOWN", "gray"
-        if yield_val > 4.5:
-            return "HIGH", "red"
-        elif yield_val > 4.0:
-            return "ELEVATED", "yellow"
-        elif yield_val > 3.5:
-            return "MODERATE", "green"
-        else:
-            return "LOW", "green"
-    
+    # Determine traffic light statuses using module-level helpers
     vix_val = regime_snapshot.get("vix")
     hy_val = regime_snapshot.get("hy_oas_bps")
     yield_val = regime_snapshot.get("yield_10y")
     
-    regime_label, regime_color = get_regime_status(vix_val, hy_val)
-    vol_label, vol_color = get_vol_status(vix_val)
-    credit_label, credit_color = get_credit_status(hy_val)
-    rates_label, rates_color = get_rates_status(yield_val)
+    regime_label, regime_color = _get_regime_status(vix_val, hy_val)
+    vol_label, vol_color = _get_vol_status(vix_val)
+    credit_label, credit_color = _get_credit_status(hy_val)
+    rates_label, rates_color = _get_rates_status(yield_val)
     
     # Format today's releases for display
     events_display = {
@@ -2449,75 +1779,13 @@ def _generate_palmer_analysis():
         portfolio_analysis = _categorize_portfolio_positions(portfolio_positions)
         scenario_matrix = portfolio_analysis.get("scenario_matrix", {})
         
-        # Build quantitative regime context
-        vix_context = ""
-        if vix_val:
-            if vix_val < 14:
-                vix_context = f"VIX at {vix_val:.1f} (5th-15th percentile) — implied vol compressed, hedges cheap but portfolio vol positions face theta decay"
-            elif vix_val < 18:
-                vix_context = f"VIX at {vix_val:.1f} (25th-45th percentile) — normal regime, balanced convexity vs carry trade-off"
-            elif vix_val < 22:
-                vix_context = f"VIX at {vix_val:.1f} (50th-70th percentile) — elevated regime, event risk priced, vol positions approaching profitability zone"
-            elif vix_val < 28:
-                vix_context = f"VIX at {vix_val:.1f} (75th-90th percentile) — stressed regime, term structure likely inverted, vol positions should be delta-hedging"
-            else:
-                vix_context = f"VIX at {vix_val:.1f} (>90th percentile) — crisis regime, vol positions at max vega, consider rolling strikes"
-        
-        # HY spread context
-        hy_context = ""
-        if hy_val:
-            if hy_val < 300:
-                hy_context = f"HY OAS at {hy_val:.0f}bp (tight) — credit risk underpriced, HYG put holders waiting for catalyst"
-            elif hy_val < 350:
-                hy_context = f"HY OAS at {hy_val:.0f}bp (normal) — credit benign but tightening cycle mature, watching for spread decompression"
-            elif hy_val < 450:
-                hy_context = f"HY OAS at {hy_val:.0f}bp (widening) — early stress signals, HYG put deltas expanding, equity-credit correlation rising"
-            else:
-                hy_context = f"HY OAS at {hy_val:.0f}bp (stressed) — credit dislocation, HYG puts deep ITM, contagion risk to equity"
-        
-        # Rates context
-        rate_context = ""
-        if yield_val:
-            if yield_val < 3.5:
-                rate_context = f"10Y at {yield_val:.2f}% (dovish) — duration tailwind, TLT calls profitable, growth outperforming value"
-            elif yield_val < 4.2:
-                rate_context = f"10Y at {yield_val:.2f}% (neutral) — Fed at terminal, duration-sensitive plays range-bound"
-            elif yield_val < 4.7:
-                rate_context = f"10Y at {yield_val:.2f}% (restrictive) — term premium rebuilding, growth/tech equity multiples under pressure"
-            else:
-                rate_context = f"10Y at {yield_val:.2f}% (hawkish extreme) — fiscal supply pressure, equity multiple compression accelerating"
+        # Build quantitative regime context using module-level helpers
+        vix_context = _build_vix_context(vix_val)
+        hy_context = _build_hy_context(hy_val)
+        rate_context = _build_rates_context(yield_val)
         
         # Build scenario impact descriptions
-        scenario_impacts = []
-        
-        # Risk-off scenario
-        risk_off_winners = scenario_matrix.get("risk_off_spike", {}).get("winners", [])
-        risk_off_losers = scenario_matrix.get("risk_off_spike", {}).get("losers", [])
-        if risk_off_winners or risk_off_losers:
-            impact = "RISK-OFF SPIKE (VIX +10, SPX -10%): "
-            parts = []
-            if risk_off_winners:
-                parts.append(f"Winners: {', '.join(list(set(risk_off_winners))[:3])}")
-            if risk_off_losers:
-                parts.append(f"Losers: {', '.join(list(set(risk_off_losers))[:3])}")
-            scenario_impacts.append(impact + " | ".join(parts))
-        
-        # Goldilocks rally
-        rally_winners = scenario_matrix.get("goldilocks_rally", {}).get("winners", [])
-        rally_losers = scenario_matrix.get("goldilocks_rally", {}).get("losers", [])
-        if rally_winners or rally_losers:
-            impact = "GOLDILOCKS RALLY (VIX -5, SPX +5%): "
-            parts = []
-            if rally_winners:
-                parts.append(f"Winners: {', '.join(list(set(rally_winners))[:3])}")
-            if rally_losers:
-                parts.append(f"Losers: {', '.join(list(set(rally_losers))[:3])}")
-            scenario_impacts.append(impact + " | ".join(parts))
-        
-        # Credit stress
-        credit_winners = scenario_matrix.get("credit_stress", {}).get("winners", [])
-        if credit_winners:
-            scenario_impacts.append(f"CREDIT STRESS (HY +150bp): Winners: {', '.join(list(set(credit_winners))[:3])}")
+        scenario_impacts = _build_scenario_impacts(scenario_matrix)
         
         # Format events with significance
         events_context = ""
@@ -2898,7 +2166,8 @@ def get_market_news_data():
     }
 
 
-# Start background refresh threads on app startup
+# ============ BACKGROUND THREADS ============
+
 _background_threads_started = False
 
 def start_background_threads():
@@ -2931,6 +2200,8 @@ def start_background_threads():
 # Alias for backward compatibility
 start_palmer_background = start_background_threads
 
+
+# ============ APP STARTUP ============
 
 # Auto-start background threads when module loads (works with gunicorn)
 # Only start once per worker process
