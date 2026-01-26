@@ -72,6 +72,33 @@ MC_CACHE = {
 MC_CACHE_LOCK = threading.Lock()
 MC_REFRESH_INTERVAL = 60 * 60  # 1 hour in seconds
 
+# ============ POSITIONS CACHE ============
+# Short-lived cache for positions data - reduces API calls on rapid refreshes
+POSITIONS_CACHE = {
+    "data": None,
+    "timestamp": None,
+}
+POSITIONS_CACHE_LOCK = threading.Lock()
+POSITIONS_CACHE_TTL = 30  # 30 seconds - balance between freshness and performance
+
+# ============ OTHER DATA CACHES ============
+# Short-lived caches for other frequently requested data
+INVESTORS_CACHE = {"data": None, "timestamp": None}
+INVESTORS_CACHE_LOCK = threading.Lock()
+INVESTORS_CACHE_TTL = 60  # 1 minute
+
+TRADES_CACHE = {"data": None, "timestamp": None}
+TRADES_CACHE_LOCK = threading.Lock()
+TRADES_CACHE_TTL = 60  # 1 minute
+
+DOMAINS_CACHE = {"data": None, "timestamp": None}
+DOMAINS_CACHE_LOCK = threading.Lock()
+DOMAINS_CACHE_TTL = 120  # 2 minutes
+
+NEWS_CACHE = {"data": None, "timestamp": None}
+NEWS_CACHE_LOCK = threading.Lock()
+NEWS_CACHE_TTL = 300  # 5 minutes
+
 
 # ============ QUOTE FETCHING HELPERS ============
 
@@ -107,6 +134,65 @@ def _fetch_stock_quote(data_client, symbol: str) -> dict:
     except Exception as e:
         print(f"[Quote] Stock quote fetch error for {symbol}: {e}")
     return None
+
+
+def _fetch_batch_option_quotes(data_client, symbols: list[str]) -> dict[str, dict]:
+    """
+    Batch fetch bid/ask quotes for multiple options in a single API call.
+    Returns dict mapping symbol -> {'bid': float, 'ask': float}
+    """
+    if not symbols:
+        return {}
+    
+    result = {}
+    try:
+        from alpaca.data.requests import OptionLatestQuoteRequest
+        req = OptionLatestQuoteRequest(symbol_or_symbols=symbols)
+        quotes = data_client.get_option_latest_quote(req)
+        if quotes:
+            for symbol, q in quotes.items():
+                result[symbol] = {
+                    "bid": float(getattr(q, 'bid_price', 0) or 0),
+                    "ask": float(getattr(q, 'ask_price', 0) or 0),
+                }
+    except Exception as e:
+        print(f"[Quote] Batch option quote fetch error: {e}")
+    return result
+
+
+def _fetch_batch_stock_quotes(data_client, symbols: list[str]) -> dict[str, dict]:
+    """
+    Batch fetch bid/ask quotes for multiple stocks/ETFs in a single API call.
+    Returns dict mapping symbol -> {'bid': float, 'ask': float}
+    
+    Note: data_client is OptionHistoricalDataClient, so we create a StockHistoricalDataClient here.
+    """
+    if not symbols:
+        return {}
+    
+    result = {}
+    try:
+        from alpaca.data.requests import StockLatestQuoteRequest
+        from alpaca.data.historical import StockHistoricalDataClient
+        
+        # Create stock data client (uses same API keys from env)
+        stock_client = StockHistoricalDataClient(
+            api_key=os.environ.get("ALPACA_API_KEY"),
+            secret_key=os.environ.get("ALPACA_SECRET_KEY"),
+            url_override=os.environ.get("ALPACA_DATA_URL"),
+        )
+        
+        req = StockLatestQuoteRequest(symbol_or_symbols=symbols)
+        quotes = stock_client.get_stock_latest_quote(req)
+        if quotes:
+            for symbol, q in quotes.items():
+                result[symbol] = {
+                    "bid": float(getattr(q, 'bid_price', 0) or 0),
+                    "ask": float(getattr(q, 'ask_price', 0) or 0),
+                }
+    except Exception as e:
+        print(f"[Quote] Batch stock quote fetch error: {e}")
+    return result
 
 
 def _generate_position_theory(position, regime_context, settings):
@@ -356,8 +442,22 @@ def _get_twr_return():
 
 # ============ DATA FUNCTIONS ============
 
-def get_positions_data():
-    """Fetch positions and calculate P&L using conservative bid/ask marking."""
+def get_positions_data(force_refresh: bool = False):
+    """
+    Fetch positions and calculate P&L using conservative bid/ask marking.
+    
+    Uses short-lived cache (30s) to reduce API calls on rapid refreshes.
+    Uses batch quote fetching for performance.
+    """
+    # Check cache first (unless force refresh)
+    if not force_refresh:
+        with POSITIONS_CACHE_LOCK:
+            if POSITIONS_CACHE["data"] and POSITIONS_CACHE["timestamp"]:
+                cache_age = (datetime.now(timezone.utc) - POSITIONS_CACHE["timestamp"]).total_seconds()
+                if cache_age < POSITIONS_CACHE_TTL:
+                    print(f"[Positions] Serving from cache (age: {cache_age:.1f}s)")
+                    return POSITIONS_CACHE["data"]
+    
     try:
         settings = load_settings()
         trading, data_client = make_clients(settings)
@@ -370,66 +470,78 @@ def get_positions_data():
         total_pnl = nav_equity - original_capital
         regime_context = _get_regime_context(settings)
         
+        # OPTIMIZATION: Pre-parse all positions and batch quote requests
+        position_data = []
+        option_symbols = []
+        stock_symbols = []
+        
+        for p in positions:
+            symbol = str(getattr(p, "symbol", "") or "")
+            if not symbol:
+                continue
+            
+            opt_info = _parse_option_symbol(symbol)
+            position_data.append({
+                "raw": p,
+                "symbol": symbol,
+                "opt_info": opt_info,
+                "qty": float(getattr(p, "qty", 0.0) or 0.0),
+                "avg_entry": float(getattr(p, "avg_entry_price", 0.0) or 0.0),
+                "current_price": float(getattr(p, "current_price", 0.0) or 0.0),
+            })
+            
+            if opt_info:
+                option_symbols.append(symbol)
+            else:
+                stock_symbols.append(symbol)
+        
+        # OPTIMIZATION: Batch fetch all quotes in 2 API calls (instead of N)
+        print(f"[Positions] Batch fetching quotes: {len(option_symbols)} options, {len(stock_symbols)} stocks")
+        option_quotes = _fetch_batch_option_quotes(data_client, option_symbols)
+        stock_quotes = _fetch_batch_stock_quotes(data_client, stock_symbols)
+        all_quotes = {**option_quotes, **stock_quotes}
+        
         positions_list = []
         total_liquidation_value = 0.0
         
-        # Process positions with conservative bid/ask marking
-        for p in positions:
+        # Process positions with pre-fetched quotes
+        for pd in position_data:
             try:
-                symbol = str(getattr(p, "symbol", "") or "")
-                if not symbol:
-                    continue
-                    
-                qty = float(getattr(p, "qty", 0.0) or 0.0)
-                mv = float(getattr(p, "market_value", 0.0) or 0.0)  # Alpaca's mid-market mark
-                avg_entry = float(getattr(p, "avg_entry_price", 0.0) or 0.0)
-                current_price = float(getattr(p, "current_price", 0.0) or 0.0)
+                symbol = pd["symbol"]
+                qty = pd["qty"]
+                avg_entry = pd["avg_entry"]
+                current_price = pd["current_price"]
+                opt_info = pd["opt_info"]
                 
-                # Parse option symbol using helper function
-                opt_info = _parse_option_symbol(symbol)
-                
-                # Fetch real bid/ask quote for conservative marking
-                quote = None
-                liquidation_price = current_price  # Fallback to Alpaca's price
-                
-                if opt_info:
-                    # Option position - fetch option quote
-                    quote = _fetch_option_quote(data_client, symbol)
-                    multiplier = 100
-                else:
-                    # Stock/ETF position - fetch stock quote  
-                    quote = _fetch_stock_quote(data_client, symbol)
-                    multiplier = 1
+                # Use pre-fetched quote
+                quote = all_quotes.get(symbol)
+                liquidation_price = current_price  # Fallback
+                multiplier = 100 if opt_info else 1
                 
                 # Conservative mark: longs at bid, shorts at ask
                 if quote:
-                    if qty > 0:  # Long position - mark at bid (what we'd get selling)
+                    if qty > 0:  # Long position - mark at bid
                         liquidation_price = quote["bid"] if quote["bid"] > 0 else current_price
-                    else:  # Short position - mark at ask (what we'd pay to cover)
+                    else:  # Short position - mark at ask
                         liquidation_price = quote["ask"] if quote["ask"] > 0 else current_price
                 
                 # Calculate liquidation value and P&L
-                if opt_info:
-                    entry_cost = avg_entry * multiplier * abs(qty) if avg_entry > 0 else 0
-                    liquidation_value = liquidation_price * multiplier * abs(qty)
-                    pnl = liquidation_value - entry_cost if qty > 0 else entry_cost - liquidation_value
-                else:
-                    entry_cost = avg_entry * abs(qty) if avg_entry > 0 else 0
-                    liquidation_value = liquidation_price * abs(qty) if qty > 0 else liquidation_price * abs(qty)
-                    pnl = liquidation_value - entry_cost if qty > 0 else entry_cost - liquidation_value
+                entry_cost = avg_entry * multiplier * abs(qty) if avg_entry > 0 else 0
+                liquidation_value = liquidation_price * multiplier * abs(qty)
+                pnl = liquidation_value - entry_cost if qty > 0 else entry_cost - liquidation_value
                 
                 total_liquidation_value += liquidation_value
                 
-                # Generate intelligent theory for this position
+                # Build position dict
                 position_dict = {
                     "symbol": symbol,
                     "qty": qty,
-                    "market_value": liquidation_value,  # Now using liquidation value
+                    "market_value": liquidation_value,
                     "pnl": pnl,
                     "pnl_pct": (pnl / entry_cost * 100) if entry_cost > 0 else 0.0,
-                    "current_price": liquidation_price,  # Show liquidation price
+                    "current_price": liquidation_price,
                     "opt_info": opt_info,
-                    "bid_ask_mark": True,  # Flag that this is conservatively marked
+                    "bid_ask_mark": True,
                 }
                 
                 # Generate macro-aware theory
@@ -480,7 +592,7 @@ def get_positions_data():
         alpha_sp500 = return_pct - sp500_return if sp500_return is not None else None
         alpha_btc = return_pct - btc_return if btc_return is not None else None
         
-        return {
+        result = {
             "positions": positions_list,
             "total_pnl": liquidation_pnl,  # Conservative P&L at bid/ask
             "total_value": total_liquidation_value,
@@ -495,7 +607,15 @@ def get_positions_data():
             "cash_available": cash_available,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "mark_type": "liquidation",  # Flag that this is bid/ask marked
+            "cached": False,
         }
+        
+        # Save to cache
+        with POSITIONS_CACHE_LOCK:
+            POSITIONS_CACHE["data"] = {**result, "cached": True}
+            POSITIONS_CACHE["timestamp"] = datetime.now(timezone.utc)
+        
+        return result
     except Exception as e:
         import traceback
         error_msg = str(e)
@@ -543,16 +663,35 @@ def index():
 
 @app.route('/api/positions')
 def api_positions():
-    """API endpoint for positions data."""
+    """API endpoint for positions data with caching."""
     data = get_positions_data()
-    return jsonify(data)
+    response = jsonify(data)
+    # Cache for 30 seconds (positions change frequently)
+    response.headers['Cache-Control'] = 'public, max-age=30'
+    return response
 
 
 @app.route('/api/closed-trades')
 def api_closed_trades():
-    """API endpoint for closed trades (realized P&L)."""
+    """API endpoint for closed trades (realized P&L) with caching."""
+    # Check cache
+    with TRADES_CACHE_LOCK:
+        if TRADES_CACHE["data"] and TRADES_CACHE["timestamp"]:
+            cache_age = (datetime.now(timezone.utc) - TRADES_CACHE["timestamp"]).total_seconds()
+            if cache_age < TRADES_CACHE_TTL:
+                response = jsonify(TRADES_CACHE["data"])
+                response.headers['Cache-Control'] = 'public, max-age=60'
+                return response
+    
     try:
-        return jsonify(get_closed_trades_data())
+        data = get_closed_trades_data()
+        # Save to cache
+        with TRADES_CACHE_LOCK:
+            TRADES_CACHE["data"] = data
+            TRADES_CACHE["timestamp"] = datetime.now(timezone.utc)
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'public, max-age=60'
+        return response
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -561,10 +700,26 @@ def api_closed_trades():
 
 @app.route('/api/regime-domains')
 def api_regime_domains():
-    """API endpoint for regime domain indicators (funding, USD, commodities, etc.)."""
+    """API endpoint for regime domain indicators with caching."""
+    # Check cache
+    with DOMAINS_CACHE_LOCK:
+        if DOMAINS_CACHE["data"] and DOMAINS_CACHE["timestamp"]:
+            cache_age = (datetime.now(timezone.utc) - DOMAINS_CACHE["timestamp"]).total_seconds()
+            if cache_age < DOMAINS_CACHE_TTL:
+                response = jsonify(DOMAINS_CACHE["data"])
+                response.headers['Cache-Control'] = 'public, max-age=120'
+                return response
+    
     try:
         settings = load_settings()
-        return jsonify(get_regime_domains_data(settings))
+        data = get_regime_domains_data(settings)
+        # Save to cache
+        with DOMAINS_CACHE_LOCK:
+            DOMAINS_CACHE["data"] = data
+            DOMAINS_CACHE["timestamp"] = datetime.now(timezone.utc)
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'public, max-age=120'
+        return response
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -573,9 +728,25 @@ def api_regime_domains():
 
 @app.route('/api/investors')
 def api_investors():
-    """API endpoint for investor ledger (unitized NAV)."""
+    """API endpoint for investor ledger with caching."""
+    # Check cache
+    with INVESTORS_CACHE_LOCK:
+        if INVESTORS_CACHE["data"] and INVESTORS_CACHE["timestamp"]:
+            cache_age = (datetime.now(timezone.utc) - INVESTORS_CACHE["timestamp"]).total_seconds()
+            if cache_age < INVESTORS_CACHE_TTL:
+                response = jsonify(INVESTORS_CACHE["data"])
+                response.headers['Cache-Control'] = 'public, max-age=60'
+                return response
+    
     try:
-        return jsonify(get_investor_data())
+        data = get_investor_data()
+        # Save to cache
+        with INVESTORS_CACHE_LOCK:
+            INVESTORS_CACHE["data"] = data
+            INVESTORS_CACHE["timestamp"] = datetime.now(timezone.utc)
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'public, max-age=60'
+        return response
     except Exception as e:
         import traceback
         traceback.print_exc()
