@@ -420,24 +420,51 @@ def _parse_option_symbol(symbol):
     return None
 
 
-def _get_twr_return():
-    """Get Time-Weighted Return from nav_sheet.csv."""
+def _get_live_twr(live_equity: float) -> float | None:
+    """
+    Calculate LIVE Time-Weighted Return by chaining:
+    - Historical TWR from nav_sheet.csv (up to last snapshot)
+    - Live return since last snapshot (from Alpaca)
+    
+    Formula: Live TWR = (1 + twr_cum) × (1 + return_since_snapshot) - 1
+    """
     try:
         nav_sheet_path = os.path.join(os.path.dirname(__file__), "..", "data", "nav_sheet.csv")
-        if os.path.exists(nav_sheet_path):
-            import csv
-            with open(nav_sheet_path, "r") as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-                if rows:
-                    # Latest TWR cumulative is stored as a decimal (e.g. 0.128 = 12.8%)
-                    latest = rows[-1]
-                    twr_cum = latest.get("twr_cum", "")
-                    if twr_cum:
-                        return float(twr_cum) * 100  # Convert to percentage
-    except Exception as twr_err:
-        print(f"[Positions] Could not read TWR: {twr_err}")
-    return None
+        if not os.path.exists(nav_sheet_path):
+            return None
+        
+        import csv
+        with open(nav_sheet_path, "r") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        
+        if not rows:
+            return None
+        
+        latest = rows[-1]
+        twr_cum_str = latest.get("twr_cum", "")
+        last_equity_str = latest.get("equity", "")
+        
+        if not twr_cum_str or not last_equity_str:
+            return None
+        
+        twr_cum = float(twr_cum_str)  # e.g., -0.056 = -5.6%
+        last_equity = float(last_equity_str)
+        
+        if last_equity <= 0 or live_equity <= 0:
+            return None
+        
+        # Return since last snapshot
+        return_since_snapshot = (live_equity - last_equity) / last_equity
+        
+        # Chain the returns: (1 + cumulative) × (1 + recent) - 1
+        live_twr = (1 + twr_cum) * (1 + return_since_snapshot) - 1
+        
+        return live_twr * 100  # Convert to percentage
+        
+    except Exception as e:
+        print(f"[TWR] Live TWR calculation error: {e}")
+        return None
 
 
 # ============ DATA FUNCTIONS ============
@@ -571,11 +598,15 @@ def get_positions_data(force_refresh: bool = False):
         liquidation_pnl = liquidation_nav - original_capital
         
         # ============================================
-        # LIVE Fund Return: Simple return from Alpaca
+        # LIVE Fund Return: Time-Weighted Return (TWR)
         # ============================================
-        # Use live liquidation NAV vs original capital for real-time updates.
-        # This is the true "what would investors get if we liquidated now" return.
-        return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
+        # TWR is industry standard (GIPS compliant) - removes cash flow distortion.
+        # We chain historical TWR with live return since last snapshot.
+        simple_return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
+        live_twr_pct = _get_live_twr(liquidation_nav)
+        
+        # Use live TWR if available, fallback to simple return
+        return_pct = live_twr_pct if live_twr_pct is not None else simple_return_pct
         
         
         # Get benchmark performance since inception for comparison
