@@ -570,20 +570,12 @@ def get_positions_data(force_refresh: bool = False):
         # Total P&L based on liquidation value (conservative)
         liquidation_pnl = liquidation_nav - original_capital
         
-        # Live performance since inception based on current liquidation NAV.
-        # This keeps the LOX Fund row on the dashboard updating on every refresh,
-        # instead of only when the NAV sheet CSV is updated.
-        simple_return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
-        
-        # Load TWR (Time-Weighted Return) using helper function
-        twr_pct = _get_twr_return()
-        
-        # Use TWR (time-weighted return) for headline - industry standard for hedge funds (GIPS compliant).
-        # Fall back to simple return only if TWR isn't available.
-        if twr_pct is not None:
-            return_pct = twr_pct
-        else:
-            return_pct = simple_return_pct
+        # ============================================
+        # LIVE Fund Return: Simple return from Alpaca
+        # ============================================
+        # Use live liquidation NAV vs original capital for real-time updates.
+        # This is the true "what would investors get if we liquidated now" return.
+        return_pct = (liquidation_pnl / original_capital * 100) if original_capital > 0 else 0.0
         
         
         # Get benchmark performance since inception for comparison
@@ -598,8 +590,7 @@ def get_positions_data(force_refresh: bool = False):
             "total_value": total_liquidation_value,
             "nav_equity": liquidation_nav,  # Liquidation NAV
             "original_capital": original_capital,
-            "return_pct": return_pct,
-            "twr_return_pct": twr_pct,
+            "return_pct": return_pct,  # LIVE from Alpaca
             "sp500_return": sp500_return,
             "btc_return": btc_return,
             "alpha_sp500": alpha_sp500,
