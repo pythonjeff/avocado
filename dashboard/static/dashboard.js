@@ -678,23 +678,29 @@ function processPositionsData(data) {
     document.getElementById('footer-time').textContent = `Updated ${formatTime()}`;
 }
 
-// These process functions are stubs that call the original rendering logic
-// They're used by the parallel initializer
+// Process functions mirror the original fetch functions' .then() handlers exactly
+// This ensures the parallel initializer updates the UI correctly
+
 function processInvestorsData(data) {
-    // Trigger the original fetchInvestors logic by simulating its .then() handler
-    // This is a simplified version - the real logic is in fetchInvestors
+    // NAV per unit badge
     const navUnit = document.getElementById('nav-per-unit');
-    if (navUnit && data.nav_per_unit) {
+    if (data.nav_per_unit) {
         navUnit.textContent = `$${data.nav_per_unit.toFixed(4)}`;
     }
     
+    // Total units
     const totalUnits = document.getElementById('total-units');
     if (totalUnits && data.total_units) {
         totalUnits.textContent = data.total_units.toFixed(4);
     }
     
+    // Investors table
     const tbody = document.getElementById('investors-body');
-    if (tbody && data.investors) {
+    if (!tbody) return;
+    
+    if (!data.investors || data.investors.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="loading">No investor data</td></tr>';
+    } else {
         tbody.innerHTML = data.investors.map(inv => `
             <tr>
                 <td><span class="investor-code">${inv.code}</span></td>
@@ -710,110 +716,209 @@ function processInvestorsData(data) {
 }
 
 function processMarketContextData(data) {
-    // Traffic lights
+    // Regime badge in header
+    const regimeBadge = document.getElementById('regime-badge');
+    if (regimeBadge && data.traffic_lights?.regime) {
+        const regime = data.traffic_lights.regime;
+        regimeBadge.textContent = regime.label || '—';
+        regimeBadge.className = 'regime-badge ' + (regime.label || '').toLowerCase().replace(' ', '-');
+    }
+    
+    // Regime trackers with range bars
     if (data.traffic_lights) {
-        updateLightIndicator('vix-indicator', data.traffic_lights.vix || {});
-        updateLightIndicator('hy-indicator', data.traffic_lights.hy_spread || {});
-        updateLightIndicator('yield-indicator', data.traffic_lights.yield_10y || {});
-        updateRegimeStatus(data.traffic_lights.overall || {});
-    }
-    
-    // Analysis
-    const analysisDiv = document.getElementById('palmer-text');
-    if (analysisDiv && data.analysis) {
-        analysisDiv.innerHTML = data.analysis.replace(/\n/g, '<br>');
-    }
-    
-    // Monte Carlo
-    if (data.monte_carlo) {
-        const mc = data.monte_carlo;
-        const mcExpected = document.getElementById('mc-expected');
-        const mcVar = document.getElementById('mc-var');
-        const mcWinProb = document.getElementById('mc-win-prob');
+        const tl = data.traffic_lights;
         
-        if (mcExpected && mc.expected_pnl !== undefined) {
-            mcExpected.textContent = formatCurrency(mc.expected_pnl);
-            mcExpected.className = 'mc-value ' + (mc.expected_pnl >= 0 ? 'positive' : 'negative');
+        // VIX tracker
+        const vixVal = document.getElementById('vix-value');
+        if (vixVal && tl.volatility) {
+            const vixStr = tl.volatility.value || '—';
+            vixVal.textContent = vixStr;
+            const vixNum = parseTrackerValue(vixStr);
+            if (vixNum !== null) {
+                positionMarker('vix-marker', vixNum, 10, 40);
+                if (vixNum < 18) vixVal.style.color = 'var(--green)';
+                else if (vixNum < 25) vixVal.style.color = 'var(--yellow)';
+                else vixVal.style.color = 'var(--red)';
+            }
         }
-        if (mcVar && mc.var_95 !== undefined) {
-            mcVar.textContent = formatCurrency(mc.var_95);
+        
+        // HY Spread tracker
+        const hyVal = document.getElementById('hy-value');
+        if (hyVal && tl.credit) {
+            const hyStr = tl.credit.value || '—';
+            hyVal.textContent = hyStr;
+            const hyNum = parseTrackerValue(hyStr);
+            if (hyNum !== null) {
+                positionMarker('hy-marker', hyNum, 200, 600);
+                if (hyNum < 325) hyVal.style.color = 'var(--green)';
+                else if (hyNum < 400) hyVal.style.color = 'var(--yellow)';
+                else hyVal.style.color = 'var(--red)';
+            }
         }
-        if (mcWinProb && mc.win_probability !== undefined) {
-            mcWinProb.textContent = `${(mc.win_probability * 100).toFixed(0)}%`;
+        
+        // 10Y Yield tracker
+        const ratesVal = document.getElementById('rates-value');
+        if (ratesVal && tl.rates) {
+            const ratesStr = tl.rates.value || '—';
+            ratesVal.textContent = ratesStr;
+            const ratesNum = parseTrackerValue(ratesStr);
+            if (ratesNum !== null) {
+                positionMarker('rates-marker', ratesNum, 3.0, 5.5);
+                if (ratesNum < 4.0) ratesVal.style.color = 'var(--green)';
+                else if (ratesNum < 4.5) ratesVal.style.color = 'var(--yellow)';
+                else ratesVal.style.color = 'var(--red)';
+            }
+        }
+    }
+    
+    // AI Insight
+    const insightText = document.getElementById('insight-text');
+    const insightTime = document.getElementById('insight-time');
+    if (insightText) {
+        if (data.analysis) {
+            insightText.textContent = data.analysis;
+            if (insightTime) insightTime.textContent = `Updated ${formatTime()}`;
+        } else {
+            insightText.textContent = 'Loading market analysis...';
+        }
+    }
+    
+    // Regime change alert
+    if (data.regime_changed && data.regime_change_details) {
+        if (!dismissedAlertTimestamp || new Date(data.timestamp) > new Date(dismissedAlertTimestamp)) {
+            showRegimeAlert(data.regime_change_details);
         }
     }
 }
 
 function processClosedTradesData(data) {
+    // Summary stats
+    const totalPnlEl = document.getElementById('total-realized-pnl');
+    const winRateEl = document.getElementById('win-rate');
+    const tradeCountEl = document.getElementById('trade-count');
+    
+    if (totalPnlEl) {
+        totalPnlEl.textContent = formatCurrency(data.total_pnl || 0);
+        totalPnlEl.className = 'metric-value ' + ((data.total_pnl || 0) >= 0 ? 'positive' : 'negative');
+    }
+    if (winRateEl) winRateEl.textContent = `${(data.win_rate || 0).toFixed(0)}%`;
+    if (tradeCountEl) tradeCountEl.textContent = (data.trades?.length || 0).toString();
+    
+    // Trades table
     const tbody = document.getElementById('trades-body');
     if (!tbody) return;
     
-    const summary = document.getElementById('trades-summary');
-    if (summary && data.total_pnl !== undefined) {
-        const pnlClass = data.total_pnl >= 0 ? 'positive' : 'negative';
-        summary.innerHTML = `Total: <span class="${pnlClass}">${formatCurrency(data.total_pnl)}</span> | Win Rate: ${(data.win_rate || 0).toFixed(0)}%`;
-    }
-    
     if (!data.trades || data.trades.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="loading">No closed trades</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" class="loading">No closed trades</td></tr>';
     } else {
-        tbody.innerHTML = data.trades.slice(0, 10).map(t => `
-            <tr>
-                <td>${t.symbol}</td>
-                <td>${t.close_date}</td>
-                <td class="pnl-cell ${t.pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(t.pnl)}</td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = data.trades.slice(0, 10).map(t => {
+            const pnlClass = t.pnl >= 0 ? 'positive' : 'negative';
+            return `
+                <tr>
+                    <td>${t.display_symbol || t.symbol}</td>
+                    <td>${t.close_date}</td>
+                    <td>${t.hold_days || '—'}</td>
+                    <td class="pnl-cell ${pnlClass}">
+                        ${formatCurrency(t.pnl)}
+                        <span class="pnl-percent">${formatPercent(t.pnl_pct || 0, 1)}</span>
+                    </td>
+                </tr>
+            `;
+        }).join('');
     }
 }
 
 function processRegimeDomainsData(data) {
-    if (!data.domains) return;
+    if (data.error || !data.domains) return;
     
-    for (const [key, domain] of Object.entries(data.domains)) {
-        const el = document.getElementById(`domain-${key}`);
-        if (el) {
-            el.className = `domain-item ${(domain.status || 'neutral').toLowerCase()}`;
-            const statusEl = el.querySelector('.domain-status');
-            if (statusEl) statusEl.textContent = domain.status || 'N/A';
+    const domains = data.domains;
+    
+    // Update each domain indicator - matches original fetchRegimeDomains logic exactly
+    const domainConfigs = [
+        { id: 'regime-funding', key: 'funding' },
+        { id: 'regime-usd', key: 'usd' },
+        { id: 'regime-commod', key: 'commod' },
+        { id: 'regime-volatility', key: 'volatility' },
+        { id: 'regime-housing', key: 'housing' },
+        { id: 'regime-crypto', key: 'crypto' },
+    ];
+    
+    domainConfigs.forEach(({ id, key }) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        
+        const domain = domains[key];
+        const dot = el.querySelector('.domain-dot');
+        const status = el.querySelector('.domain-status');
+        
+        if (domain) {
+            if (dot) {
+                dot.className = 'domain-dot ' + (domain.color || 'gray');
+            }
+            if (status) {
+                status.textContent = domain.label || '—';
+                // Add sentiment class
+                const label = (domain.label || '').toLowerCase();
+                if (label.includes('bull') || label.includes('easy') || label.includes('healthy') || label.includes('weak')) {
+                    status.className = 'domain-status bullish';
+                } else if (label.includes('bear') || label.includes('stress') || label.includes('tight') || label.includes('strong')) {
+                    status.className = 'domain-status bearish';
+                } else {
+                    status.className = 'domain-status neutral';
+                }
+            }
         }
-    }
+    });
 }
 
 function processMarketNewsData(data) {
-    const newsContainer = document.getElementById('news-container');
-    if (!newsContainer) return;
+    if (data.error) return;
     
-    if (!data.portfolio_news && !data.calendar_events) {
-        newsContainer.innerHTML = '<p class="no-news">No news available</p>';
-        return;
+    // Update news count badge
+    const newsCount = document.getElementById('news-count');
+    const totalItems = (data.news?.length || 0) + (data.calendar?.length || 0);
+    if (newsCount && totalItems > 0) {
+        newsCount.textContent = `${totalItems} items`;
     }
     
-    let html = '';
-    
-    if (data.portfolio_news && data.portfolio_news.length > 0) {
-        html += '<div class="news-section"><h4>Portfolio News</h4>';
-        data.portfolio_news.slice(0, 5).forEach(item => {
-            html += `<div class="news-item">
-                <span class="news-time">${formatNewsTime(item.publishedDate || item.time)}</span>
-                <a href="${item.url || '#'}" target="_blank">${item.title}</a>
-            </div>`;
-        });
-        html += '</div>';
+    // Render calendar
+    const calendarEl = document.getElementById('calendar-items');
+    if (calendarEl) {
+        if (data.calendar && data.calendar.length > 0) {
+            calendarEl.innerHTML = data.calendar.map(item => {
+                const estimate = item.estimate ? `Est: ${item.estimate}` : '';
+                return `
+                    <div class="calendar-item">
+                        <span class="calendar-date">${formatCalendarDate(item.date)}</span>
+                        <span class="calendar-event">${item.event}</span>
+                        <span class="calendar-estimate">${estimate}</span>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            calendarEl.innerHTML = '<span class="loading-text">No upcoming high-impact events</span>';
+        }
     }
     
-    if (data.calendar_events && data.calendar_events.length > 0) {
-        html += '<div class="news-section"><h4>Economic Calendar</h4>';
-        data.calendar_events.slice(0, 5).forEach(ev => {
-            html += `<div class="calendar-item">
-                <span class="event-date">${formatCalendarDate(ev.date)}</span>
-                <span class="event-name">${ev.event}</span>
-            </div>`;
-        });
-        html += '</div>';
+    // Render news feed
+    const newsFeedEl = document.getElementById('news-feed');
+    if (newsFeedEl) {
+        if (data.news && data.news.length > 0) {
+            newsFeedEl.innerHTML = data.news.map(item => `
+                <div class="news-item">
+                    <span class="news-ticker">${item.symbol}</span>
+                    <div class="news-text">
+                        <div class="news-title">
+                            <a href="${item.url}" target="_blank" rel="noopener">${item.title}</a>
+                        </div>
+                        <div class="news-meta">${item.source} · ${formatNewsTime(item.time)}</div>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            newsFeedEl.innerHTML = '<span class="loading-text">No recent news</span>';
+        }
     }
-    
-    newsContainer.innerHTML = html;
 }
 
 // Initialize with parallel loading for fast initial render
