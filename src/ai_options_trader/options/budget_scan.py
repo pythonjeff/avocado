@@ -51,8 +51,8 @@ def affordable_options_for_ticker(
     require_delta: bool = True,
     # Liquidity guardrails
     max_spread_pct: float = 0.30,
-    min_open_interest: int = 100,
-    min_volume: int = 100,
+    min_open_interest: int = 10,  # Lowered for illiquid underlyings (ETFs, etc.)
+    min_volume: int = 10,  # Lowered for illiquid underlyings
     require_liquidity: bool = True,
     today: date | None = None,
 ) -> Sequence[AffordableOption]:

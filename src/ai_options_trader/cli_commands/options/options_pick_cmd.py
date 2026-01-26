@@ -45,6 +45,8 @@ def register_pick(options_app: typer.Typer) -> None:
         max_spread_pct: float = typer.Option(0.30, "--max-spread-pct"),
         require_delta: bool = typer.Option(True, "--require-delta/--no-require-delta"),
         require_liquidity: bool = typer.Option(True, "--require-liquidity/--no-require-liquidity"),
+        min_oi: int = typer.Option(10, "--min-oi", help="Minimum open interest (default 10)"),
+        min_volume: int = typer.Option(10, "--min-vol", help="Minimum volume (default 10)"),
         top_n: int = typer.Option(10, "--top", "-n", help="Number of options to show when no budget specified"),
         execute: bool = typer.Option(False, "--execute"),
         live: bool = typer.Option(False, "--live"),
@@ -123,6 +125,8 @@ def register_pick(options_app: typer.Typer) -> None:
                 max_spread_pct=float(max_spread_pct),
                 require_delta=bool(require_delta),
                 require_liquidity=bool(require_liq),
+                min_open_interest=int(min_oi),
+                min_volume=int(min_volume),
                 today=date.today(),
             )
 
@@ -144,7 +148,84 @@ def register_pick(options_app: typer.Typer) -> None:
                 opts = _scan(bool(require_liquidity))
 
         if not opts:
-            print("[yellow]No contracts matched[/yellow]. Try widening constraints (--min-days, --max-days, --max-spread-pct).")
+            # Diagnostic: show why contracts were filtered
+            console.print("\n[yellow]No contracts matched.[/yellow] Diagnostic breakdown:\n")
+            
+            from ai_options_trader.utils.occ import parse_occ_option_symbol
+            
+            diag = {
+                "total_raw": len(candidates),
+                "wrong_type": 0,
+                "dte_out_of_range": 0,
+                "no_price": 0,
+                "price_too_low": 0,
+                "premium_too_high": 0,
+                "no_delta": 0,
+                "spread_too_wide": 0,
+                "low_liquidity": 0,
+                "passed": 0,
+            }
+            
+            for c in candidates:
+                try:
+                    expiry, opt_type, strike = parse_occ_option_symbol(c.symbol, ticker.upper())
+                except Exception:
+                    continue
+                
+                if w != "both" and opt_type != w:
+                    diag["wrong_type"] += 1
+                    continue
+                
+                dte = (expiry - date.today()).days
+                if dte < int(min_days) or dte > int(max_days):
+                    diag["dte_out_of_range"] += 1
+                    continue
+                
+                px = c.ask if pb == "ask" else (c.mid if pb == "mid" else c.last)
+                if px is None or px <= 0:
+                    diag["no_price"] += 1
+                    continue
+                
+                if px < float(min_price):
+                    diag["price_too_low"] += 1
+                    continue
+                
+                prem = px * 100.0
+                if prem > float(max_premium_usd):
+                    diag["premium_too_high"] += 1
+                    continue
+                
+                if require_delta and c.delta is None:
+                    diag["no_delta"] += 1
+                    continue
+                
+                mid = c.mid
+                sp = ((c.ask - c.bid) / mid) if c.bid and c.ask and mid and mid > 0 else None
+                if sp is None or float(sp) > float(max_spread_pct):
+                    diag["spread_too_wide"] += 1
+                    continue
+                
+                if require_liquidity:
+                    oi_ok = (c.oi is not None) and (c.oi >= int(min_oi))
+                    vol_ok = (c.volume is not None) and (c.volume >= int(min_volume))
+                    if not (oi_ok or vol_ok):
+                        diag["low_liquidity"] += 1
+                        continue
+                
+                diag["passed"] += 1
+            
+            console.print(f"  Total raw candidates: {diag['total_raw']}")
+            console.print(f"  Wrong type (not {w}): {diag['wrong_type']}")
+            console.print(f"  DTE out of range ({min_days}-{max_days}): {diag['dte_out_of_range']}")
+            console.print(f"  No price data: {diag['no_price']}")
+            console.print(f"  Price < ${min_price}: {diag['price_too_low']}")
+            console.print(f"  Premium > ${max_premium_usd:,.0f}: {diag['premium_too_high']}")
+            console.print(f"  Missing delta: {diag['no_delta']}")
+            console.print(f"  Spread > {max_spread_pct*100:.0f}%: {diag['spread_too_wide']}")
+            console.print(f"  Low liquidity (OI<{min_oi} & Vol<{min_volume}): {diag['low_liquidity']}")
+            console.print(f"  [green]Passed all filters: {diag['passed']}[/green]")
+            
+            console.print("\n[dim]Try: --max-spread-pct 0.50, --min-oi 1, --min-vol 1, --no-require-delta[/dim]")
             raise typer.Exit(code=0)
 
         # Underlying price

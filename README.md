@@ -141,6 +141,14 @@ The dashboard surfaces:
 ### 2. Deep Research
 Before any trade, I conduct multi-source analysis:
 
+**Ticker-Level Research** (Primary):
+```bash
+lox labs ticker deep -t FXI --llm     # Full ETF analysis: holdings, flows, institutional holders
+lox labs ticker deep -t AAPL --llm    # Full stock analysis: earnings, estimates, SEC filings
+lox chat -t FXI                        # Interactive discussion with research context loaded
+```
+
+**Macro Research**:
 ```bash
 lox labs commodities snapshot --llm   # Oil, gold, copper with news synthesis
 lox labs growth snapshot --llm        # Employment trends with probability scenarios
@@ -224,6 +232,60 @@ After completing research, I make the final call:
 - **Trading Economics Integration**: Primary calendar data source with FMP fallback
 - **Live Portfolio Monte Carlo**: Real-time scenario analysis using actual positions
 - **Dynamic Portfolio Analysis**: LLM adapts to current positions for contextual insights
+
+### Deep Ticker Research (January 2026) — Primary Trade Research Driver
+
+The `lox labs ticker deep` command has evolved into our **primary research tool** for individual securities. It provides institutional-grade analysis with asset-type awareness, distinguishing between ETFs and individual stocks.
+
+**Asset-Type Aware Analysis**
+- **Automatic Detection**: Identifies ETFs by holdings data, company name patterns (iShares, Vanguard, SPDR, etc.)
+- **Tailored Metrics**: Shows relevant data for each asset type — no earnings analysis for ETFs, no fund flows for stocks
+- **Context-Aware LLM**: Prompts adapt to provide fund thesis for ETFs, earnings preview for stocks
+
+**ETF Analysis Features**
+```bash
+lox labs ticker deep -t FXI --llm    # China large-cap ETF
+lox labs ticker deep -t TIP --llm    # TIPS bond ETF
+```
+- **Fund Profile**: AUM, expense ratio, holdings count, category
+- **Top Holdings**: Asset breakdown with weights (uses `name` fallback for bond holdings)
+- **Performance & Flows**: 1W, 1M, 3M, YTD returns + fund flow signals (volume trend proxy for inflows/outflows)
+- **Institutional Holders**: Top 10 investors with share counts and position changes (who's buying/selling)
+- **LLM Analysis**: Fund thesis, holdings concentration, risk factors, market environment fit
+
+**Stock Analysis Features**
+```bash
+lox labs ticker deep -t AAPL --llm   # Individual stock
+lox labs ticker deep -t NVDA --llm   # Growth stock
+```
+- **Company Profile**: Sector, industry, market cap, description
+- **Price & Technicals**: Current price, day/52-week ranges, volume analysis
+- **Hedge Fund Metrics**: P/E, P/S, P/B, EV/EBITDA, ROE, ROIC, margins, FCF yield
+- **Earnings & Estimates**: Next earnings date, analyst EPS/revenue estimates, historical beat rate
+- **SEC Filings**: Recent 8-K, 10-K, 10-Q with items/descriptions
+- **Analyst Targets**: Consensus, low, high price targets with analyst count
+- **LLM Analysis**: Bull/bear case, earnings preview, near-term catalysts
+
+**Interactive Ticker Chat**
+```bash
+lox chat -t AAPL    # Chat with AAPL context loaded
+lox chat -t FXI     # Discuss China ETF with full research context
+```
+Loads deep research data (profile, earnings, news, SEC filings) into chat for focused ticker discussions.
+
+**Example Output: ETF Institutional Holders**
+```
+                     Top Institutional Holders                        
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Institution                    ┃     Shares ┃     Change ┃ Reported   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━┩
+│ MORGAN STANLEY                 │ 30,503,443 │ +2,949,582 │ 2025-09-30 │
+│ JANE STREET GROUP, LLC         │  8,330,241 │ +8,322,966 │ 2025-09-30 │
+│ BlackRock, Inc.                │  6,151,016 │ +1,852,363 │ 2025-09-30 │
+└────────────────────────────────┴────────────┴────────────┴────────────┘
+```
+
+This research forms the foundation for every trade decision — understanding who's investing, what the fund/company does, and how it fits our macro thesis.
 
 ### v2 Regime System (January 25, 2026)
 
@@ -337,6 +399,7 @@ lox nav snapshot
 ### Research Commands
 | Command | Purpose |
 |---------|---------|
+| `lox labs ticker deep -t AAPL --llm` | **Deep ticker analysis** — primary research driver |
 | `lox dashboard` | All regime pillars |
 | `lox labs vol --llm` | Volatility research brief |
 | `lox labs rates snapshot --llm` | Rates/curve analysis |
@@ -347,12 +410,14 @@ lox nav snapshot
 | Command | Purpose |
 |---------|---------|
 | `lox chat` | Interactive research chat (default: portfolio context) |
+| `lox chat -t AAPL` | **Ticker-focused chat** — deep research context loaded |
+| `lox chat -t FXI` | ETF-focused chat with holdings, flows, institutional data |
 | `lox chat -c fiscal` | Chat with fiscal regime data loaded |
 | `lox chat -c funding` | Chat with funding/liquidity context |
 | `lox chat -c macro` | Chat with macro regime context |
 | `lox chat -c regimes` | Chat with all regimes loaded |
 
-When chatting, ask about specific tickers (e.g., "tell me about FXI") for automatic deep-dive analysis with quantitative snapshot, news, and company profile.
+The `-t` ticker option loads comprehensive research data (profile, earnings, news, SEC filings, analyst targets) into the conversation context for focused analysis.
 
 ---
 

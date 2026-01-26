@@ -600,6 +600,163 @@ def _load_multiple_contexts(contexts: list[str], refresh: bool, console: Console
     return combined_title, merged_data
 
 
+def _fetch_ticker_context(settings, ticker: str, console: Console) -> tuple[str, dict]:
+    """Fetch comprehensive ticker context for chat."""
+    t = ticker.strip().upper()
+    console.print(f"\n[cyan]Loading deep context for {t}...[/cyan]")
+    
+    data = {"ticker": t, "domain": "ticker"}
+    
+    # Profile
+    try:
+        from ai_options_trader.altdata.fmp import fetch_profile
+        profile = fetch_profile(settings=settings, ticker=t)
+        if profile:
+            data["profile"] = {
+                "name": profile.company_name,
+                "sector": profile.sector,
+                "industry": profile.industry,
+                "market_cap": profile.market_cap,
+                "description": (profile.description or "")[:500],
+            }
+    except Exception as e:
+        data["profile_error"] = str(e)
+    
+    # Quantitative snapshot
+    try:
+        from ai_options_trader.ticker.snapshot import build_ticker_snapshot
+        snap = build_ticker_snapshot(settings=settings, ticker=t, benchmark="SPY", start="2020-01-01")
+        data["snapshot"] = str(snap)
+    except Exception as e:
+        data["snapshot_error"] = str(e)
+    
+    # Earnings
+    try:
+        from ai_options_trader.altdata.earnings import fetch_earnings_surprises, fetch_upcoming_earnings, analyze_earnings_history
+        surprises = fetch_earnings_surprises(settings=settings, ticker=t, limit=8)
+        upcoming = fetch_upcoming_earnings(settings=settings, tickers=[t], days_ahead=90)
+        
+        if surprises:
+            analysis = analyze_earnings_history(surprises)
+            data["earnings_analysis"] = analysis
+            data["recent_quarters"] = [
+                {"date": s.date, "eps_actual": s.eps_actual, "eps_estimated": s.eps_estimated, "surprise_pct": s.eps_surprise_pct}
+                for s in surprises[:4]
+            ]
+        
+        if upcoming:
+            ev = upcoming[0]
+            data["next_earnings"] = {
+                "date": ev.date,
+                "time": ev.time,
+                "eps_estimate": ev.eps_estimated,
+                "revenue_estimate": ev.revenue_estimated,
+            }
+    except Exception as e:
+        data["earnings_error"] = str(e)
+    
+    # Analyst targets
+    try:
+        import requests
+        if settings.fmp_api_key:
+            url = "https://financialmodelingprep.com/api/v4/price-target-consensus"
+            resp = requests.get(url, params={"apikey": settings.fmp_api_key, "symbol": t}, timeout=10)
+            if resp.ok:
+                targets = resp.json()
+                if targets:
+                    data["analyst_targets"] = {
+                        "consensus": targets[0].get("targetConsensus"),
+                        "low": targets[0].get("targetLow"),
+                        "high": targets[0].get("targetHigh"),
+                        "num_analysts": targets[0].get("numberOfAnalysts"),
+                    }
+    except Exception as e:
+        data["analyst_error"] = str(e)
+    
+    # Current quote
+    try:
+        import requests
+        if settings.fmp_api_key:
+            url = f"https://financialmodelingprep.com/api/v3/quote/{t}"
+            resp = requests.get(url, params={"apikey": settings.fmp_api_key}, timeout=10)
+            quote_data = resp.json()
+            if isinstance(quote_data, list) and quote_data:
+                q = quote_data[0]
+                data["quote"] = {
+                    "price": q.get("price"),
+                    "change": q.get("change"),
+                    "change_pct": q.get("changesPercentage"),
+                    "day_high": q.get("dayHigh"),
+                    "day_low": q.get("dayLow"),
+                    "year_high": q.get("yearHigh"),
+                    "year_low": q.get("yearLow"),
+                    "pe": q.get("pe"),
+                    "volume": q.get("volume"),
+                    "avg_volume": q.get("avgVolume"),
+                }
+    except Exception as e:
+        data["quote_error"] = str(e)
+    
+    # Recent news
+    try:
+        from ai_options_trader.llm.outlooks.ticker_news import fetch_fmp_stock_news
+        from ai_options_trader.llm.core.sentiment import analyze_article_sentiment, aggregate_sentiment
+        from datetime import datetime, timedelta, timezone
+        
+        now = datetime.now(timezone.utc).date()
+        from_date = (now - timedelta(days=14)).isoformat()
+        
+        items = fetch_fmp_stock_news(
+            settings=settings,
+            tickers=[t],
+            from_date=from_date,
+            to_date=now.isoformat(),
+            max_pages=2,
+        )
+        if items:
+            # Sentiment analysis
+            article_sentiments = [
+                analyze_article_sentiment(
+                    headline=item.title or "",
+                    content=item.snippet or "",
+                )
+                for item in items[:10]
+            ]
+            agg = aggregate_sentiment(article_sentiments)
+            
+            data["news_sentiment"] = {
+                "label": agg.label,
+                "score": agg.score,
+                "positive": agg.positive_count,
+                "negative": agg.negative_count,
+                "neutral": agg.neutral_count,
+            }
+            data["recent_headlines"] = [
+                {"headline": item.title, "source": item.source, "date": str(item.published_at)}
+                for item in items[:5]
+            ]
+    except Exception as e:
+        data["news_error"] = str(e)
+    
+    # SEC filings
+    try:
+        from ai_options_trader.altdata.sec import fetch_8k_filings, summarize_filings
+        filings = fetch_8k_filings(settings=settings, ticker=t, limit=5)
+        if filings:
+            data["recent_filings"] = [
+                {"date": f.filed_date, "type": f.form_type, "items": f.items[:2]}
+                for f in filings[:3]
+            ]
+    except Exception as e:
+        data["filings_error"] = str(e)
+    
+    title = f"Ticker Deep Dive: {t}"
+    if "profile" in data:
+        title = f"{data['profile'].get('name', t)} ({t})"
+    
+    return title, data
+
+
 @app.command("start")
 def chat_start(
     context: list[str] = typer.Option(
@@ -607,6 +764,7 @@ def chat_start(
         "--context", "-c",
         help="Context(s) to load: fiscal, vol, macro, commodities, rates, funding, monetary, regimes, portfolio. Use multiple -c flags or comma-separated."
     ),
+    ticker: str = typer.Option("", "--ticker", "-t", help="Ticker to analyze (loads deep research context)"),
     refresh: bool = typer.Option(False, "--refresh", help="Force refresh data"),
     model: str = typer.Option("", "--model", "-m", help="Override LLM model"),
 ):
@@ -615,6 +773,7 @@ def chat_start(
     
     Examples:
         lox chat start                      # Portfolio context
+        lox chat start -t AAPL              # Ticker-focused chat
         lox chat start -c fiscal            # Fiscal regime context
         lox chat start -c fiscal -c funding # Multiple contexts
         lox chat start -c fiscal,funding,monetary  # Comma-separated
@@ -626,9 +785,19 @@ def chat_start(
         console.print("[red]Error:[/red] OPENAI_API_KEY not set in .env")
         raise typer.Exit(1)
     
-    # Parse and load contexts
+    # If ticker specified, load ticker context
+    ticker_context = None
+    if ticker.strip():
+        try:
+            title, ticker_context = _fetch_ticker_context(settings, ticker, console)
+            _format_context_display(title, ticker_context, console)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load ticker context: {e}[/yellow]")
+    
+    # Parse and load domain contexts
     parsed_contexts = _parse_contexts(context)
-    console.print(f"\n[cyan]Loading context(s): {', '.join(parsed_contexts)}...[/cyan]")
+    if not ticker.strip():  # Only show context loading if no ticker (otherwise already shown)
+        console.print(f"\n[cyan]Loading context(s): {', '.join(parsed_contexts)}...[/cyan]")
     
     try:
         title, context_data = _load_multiple_contexts(parsed_contexts, refresh, console)
@@ -636,12 +805,21 @@ def chat_start(
         console.print(f"[red]Error loading context:[/red] {e}")
         raise typer.Exit(1)
     
-    # Display context
-    _format_context_display(title, context_data, console)
+    # Merge ticker context into main context if present
+    if ticker_context:
+        context_data["ticker_focus"] = ticker_context
+        title = f"{ticker.upper()} + {title}"
+    
+    # Display context (only if no ticker, since ticker context already shown)
+    if not ticker.strip():
+        _format_context_display(title, context_data, console)
     
     # Chat loop
     console.print("\n[green]Chat started.[/green] Type your questions (or 'quit' to exit):\n")
-    console.print("[dim]Tip: Ask about specific tickers (e.g., 'tell me about FXI') for deep analysis.[/dim]\n")
+    if ticker.strip():
+        console.print(f"[dim]Focused on {ticker.upper()}. Ask about outlook, earnings, price targets, risks, etc.[/dim]\n")
+    else:
+        console.print("[dim]Tip: Ask about specific tickers (e.g., 'tell me about FXI') for deep analysis.[/dim]\n")
     
     messages = []
     chosen_model = model.strip() or None
@@ -715,6 +893,7 @@ def main(
         "--context", "-c",
         help="Context(s) to load: fiscal, vol, macro, commodities, rates, funding, monetary, regimes, portfolio. Use multiple -c flags or comma-separated."
     ),
+    ticker: str = typer.Option("", "--ticker", "-t", help="Ticker to analyze (loads deep research context)"),
     refresh: bool = typer.Option(False, "--refresh", help="Force refresh data"),
     model: str = typer.Option("", "--model", "-m", help="Override LLM model"),
 ):
@@ -725,10 +904,12 @@ def main(
     
     Examples:
         lox chat                           # Portfolio context (default)
+        lox chat -t AAPL                   # Ticker-focused chat
+        lox chat -t META -c macro          # Ticker + macro context
         lox chat -c fiscal                 # Fiscal regime context
         lox chat -c fiscal -c funding      # Multiple contexts
         lox chat -c fiscal,funding,monetary  # Comma-separated contexts
         lox chat -c regimes                # All regimes summary
     """
     if ctx.invoked_subcommand is None:
-        chat_start(context=context, refresh=refresh, model=model)
+        chat_start(context=context, ticker=ticker, refresh=refresh, model=model)
