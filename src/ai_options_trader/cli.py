@@ -180,6 +180,9 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.ideas.ideas_clean import register_ideas as register_ideas_clean
     from ai_options_trader.cli_commands.ideas.hedges_cmd import register as register_hedges
     
+    # Scanner commands
+    from ai_options_trader.cli_commands.scanner.bubble_finder_cmd import register as register_bubble_finder
+    
     # Other commands (remain at root)
     from ai_options_trader.cli_commands.track_cmd import register as register_track
     from ai_options_trader.cli_commands.autopilot_cmd import register as register_autopilot
@@ -236,6 +239,7 @@ def _register_commands() -> None:
     register_news(news_app)
     register_solar(solar_app)
     register_silver(silver_app)
+    register_bubble_finder(labs_app)  # Bubble finder scanner
     
     # Quick pillar access under labs
     register_pillar_commands(labs_app)
