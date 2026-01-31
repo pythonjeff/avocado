@@ -1,125 +1,293 @@
 from __future__ import annotations
 
+from datetime import date
 import typer
 
 app = typer.Typer(
     add_completion=False, 
-    help="""Lox Capital CLI — Regime-aware portfolio research & management.
+    help="""Lox Capital CLI — Portfolio research and options trading.
 
 \b
-QUICK START:
-  lox status              Portfolio health (NAV, P&L, cash)
-  lox dashboard           All regime pillars at a glance
-  lox chat                Interactive research chat with LLM
-  lox suggest             Trade ideas based on current regime
+DAILY USE:
+  lox status                 Portfolio health (NAV, P&L, cash)
+  lox dashboard              All regime pillars at a glance
+  lox scan -t NVDA           Options chain scanner
+  lox research -t NVDA       Deep research on a ticker
 
 \b
 RESEARCH:
-  lox labs vol --llm      Volatility research brief
-  lox labs fiscal snapshot US fiscal data (deficits, TGA)
-  lox labs mc-v01 --real  Monte Carlo scenario analysis
+  lox regime vol             Volatility regime
+  lox regime fiscal          Fiscal regime (deficits, TGA)
+  lox scenario monte-carlo   Monte Carlo simulation
 
 \b
-Run 'lox <command> --help' for details on any command.
+TRADING:
+  lox trade                  Automated trade workflow
+  lox ideas                  Trade ideas from screens
+
+\b
+Run 'lox <command> --help' for details.
 """
 )
 
 # ---------------------------------------------------------------------------
-# Core command groups (most commonly used)
+# TOP-LEVEL COMMANDS (flat, most commonly used)
 # ---------------------------------------------------------------------------
 
-# Chat - interactive research conversations (most useful, first)
+@app.command("scan")
+def scan_cmd(
+    ticker: str = typer.Option(..., "--ticker", "-t", help="Ticker symbol"),
+    want: str = typer.Option("put", "--want", "-w", help="call or put"),
+    min_days: int = typer.Option(30, "--min-days", help="Min DTE"),
+    max_days: int = typer.Option(365, "--max-days", help="Max DTE"),
+    show: int = typer.Option(30, "--show", "-n", help="Number of results"),
+):
+    """
+    Options chain scanner.
+    
+    Examples:
+        lox scan -t NVDA
+        lox scan -t CRWV --want put --min-days 100
+    """
+    from ai_options_trader.config import load_settings
+    from ai_options_trader.data.alpaca import fetch_option_chain, make_clients
+    from ai_options_trader.utils.occ import parse_occ_option_symbol
+    from rich.console import Console
+    from rich.table import Table
+    
+    settings = load_settings()
+    _, data = make_clients(settings)
+    
+    w = want.strip().lower()
+    if w not in {"call", "put"}:
+        w = "put"
+    
+    console = Console()
+    t = ticker.upper()
+    today = date.today()
+    
+    console.print(f"\n[bold cyan]{t} {w.upper()}s[/bold cyan] | DTE: {min_days}-{max_days}\n")
+    
+    chain = fetch_option_chain(data, t, feed=settings.alpaca_options_feed)
+    if not chain:
+        console.print("[yellow]No options data[/yellow]")
+        return
+    
+    opts = []
+    for opt in chain.values():
+        symbol = str(getattr(opt, "symbol", ""))
+        if not symbol:
+            continue
+        try:
+            expiry, opt_type, strike = parse_occ_option_symbol(symbol, t)
+            if opt_type != w:
+                continue
+            dte = (expiry - today).days
+            if dte < min_days or dte > max_days:
+                continue
+            
+            greeks = getattr(opt, "greeks", None)
+            delta = getattr(greeks, "delta", None) if greeks else None
+            quote = getattr(opt, "latest_quote", None)
+            bid = getattr(quote, "bid_price", None) if quote else None
+            ask = getattr(quote, "ask_price", None) if quote else None
+            trade = getattr(opt, "latest_trade", None)
+            last = getattr(trade, "price", None) if trade else None
+            
+            opts.append({
+                "symbol": symbol, "strike": strike, "dte": dte,
+                "delta": float(delta) if delta else None,
+                "bid": float(bid) if bid else None,
+                "ask": float(ask) if ask else None,
+                "last": float(last) if last else None,
+            })
+        except Exception:
+            continue
+    
+    if not opts:
+        console.print(f"[yellow]No {w}s in {min_days}-{max_days} DTE[/yellow]")
+        return
+    
+    opts.sort(key=lambda x: (x["strike"], x["dte"]))
+    opts = opts[:show]
+    
+    console.print(f"[dim]Found {len(opts)} contracts[/dim]\n")
+    
+    table = Table(show_header=True, expand=False)
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Strike", justify="right")
+    table.add_column("DTE", justify="right")
+    table.add_column("Delta", justify="right")
+    table.add_column("Bid", justify="right")
+    table.add_column("Ask", justify="right", style="yellow")
+    table.add_column("Last", justify="right")
+    
+    for o in opts:
+        table.add_row(
+            o["symbol"],
+            f"${o['strike']:.2f}",
+            str(o["dte"]),
+            f"{o['delta']:+.3f}" if o["delta"] else "—",
+            f"${o['bid']:.2f}" if o["bid"] else "—",
+            f"${o['ask']:.2f}" if o["ask"] else "—",
+            f"${o['last']:.2f}" if o["last"] else "—",
+        )
+    console.print(table)
+
+
+@app.command("research")
+def research_cmd(
+    ticker: str = typer.Option(..., "--ticker", "-t", help="Ticker symbol"),
+    llm: bool = typer.Option(False, "--llm", help="Include LLM analysis"),
+):
+    """
+    Deep research on a ticker.
+    
+    Examples:
+        lox research -t NVDA
+        lox research -t AAPL --llm
+    """
+    from ai_options_trader.cli_commands.analysis.fundamentals_cmd import _run_research_deep_dive
+    _run_research_deep_dive(ticker, llm=llm)
+
+
+# ---------------------------------------------------------------------------
+# REGIME SUBGROUP (consolidated)
+# ---------------------------------------------------------------------------
+regime_app = typer.Typer(add_completion=False, help="Economic regime analysis")
+app.add_typer(regime_app, name="regime")
+
+
+@regime_app.command("vol")
+def regime_vol(llm: bool = typer.Option(False, "--llm", help="Include LLM analysis")):
+    """Volatility regime (VIX level, term structure)."""
+    from ai_options_trader.cli_commands.regimes.volatility_cmd import volatility_snapshot
+    volatility_snapshot(llm=llm)
+
+
+@regime_app.command("fiscal")
+def regime_fiscal():
+    """US fiscal regime (deficits, TGA, issuance)."""
+    from ai_options_trader.cli_commands.regimes.fiscal_cmd import fiscal_snapshot
+    fiscal_snapshot()
+
+
+@regime_app.command("funding")
+def regime_funding():
+    """Funding markets (SOFR, repo spreads)."""
+    from ai_options_trader.cli_commands.regimes.funding_cmd import funding_snapshot
+    funding_snapshot()
+
+
+@regime_app.command("rates")
+def regime_rates():
+    """Rates / yield curve analysis."""
+    from ai_options_trader.cli_commands.regimes.rates_cmd import rates_snapshot
+    rates_snapshot()
+
+
+@regime_app.command("macro")
+def regime_macro():
+    """Macro regime overview."""
+    from ai_options_trader.cli_commands.regimes.macro_cmd import macro_snapshot
+    macro_snapshot()
+
+
+# ---------------------------------------------------------------------------
+# SCENARIO SUBGROUP (consolidated)
+# ---------------------------------------------------------------------------
+scenario_app = typer.Typer(add_completion=False, help="Portfolio scenario analysis")
+app.add_typer(scenario_app, name="scenario")
+
+
+@scenario_app.command("monte-carlo")
+def scenario_monte_carlo(
+    real: bool = typer.Option(False, "--real", help="Use real positions"),
+):
+    """Monte Carlo simulation with 10,000+ scenarios."""
+    from ai_options_trader.cli_commands.analysis.scenarios_cmd import scenarios_monte_carlo
+    scenarios_monte_carlo(real=real)
+
+
+@scenario_app.command("stress")
+def scenario_stress():
+    """Stress test portfolio under extreme conditions."""
+    from ai_options_trader.cli_commands.analysis.stress_cmd import stress_test
+    stress_test()
+
+
+# ---------------------------------------------------------------------------
+# SUBGROUPS (organized by function)
+# ---------------------------------------------------------------------------
+
+# Chat - interactive research
 from ai_options_trader.cli_commands.chat_cmd import app as chat_app
 app.add_typer(chat_app, name="chat")
 
-nav_app = typer.Typer(add_completion=False, help="Fund accounting: NAV tracking, investor ledger, cash flows")
-app.add_typer(nav_app, name="nav")
+# Trade execution (renamed from autopilot)
+trade_app = typer.Typer(add_completion=False, help="Trade execution and automation")
+app.add_typer(trade_app, name="trade")
 
-# ---------------------------------------------------------------------------
-# Trade execution & ideas
-# ---------------------------------------------------------------------------
-autopilot_app = typer.Typer(add_completion=False, help="Automated trade workflow with regime-aware sizing")
-app.add_typer(autopilot_app, name="autopilot")
-
-options_app = typer.Typer(add_completion=False, help="Options scanners: moonshot, picks, budget filters")
+# Options (full commands)
+options_app = typer.Typer(add_completion=False, help="Full options toolset")
 app.add_typer(options_app, name="options")
 
-ideas_app = typer.Typer(add_completion=False, help="Trade ideas from catalysts, screens, and events")
+# Ideas
+ideas_app = typer.Typer(add_completion=False, help="Trade ideas from screens and catalysts")
 app.add_typer(ideas_app, name="ideas")
 
-# ---------------------------------------------------------------------------
-# Analytics & reporting
-# ---------------------------------------------------------------------------
-model_app = typer.Typer(add_completion=False, help="ML models: regime prediction, backtesting, evaluation")
-app.add_typer(model_app, name="model")
+# Account
+nav_app = typer.Typer(add_completion=False, help="NAV tracking and fund accounting")
+app.add_typer(nav_app, name="nav")
 
-live_app = typer.Typer(add_completion=False, help="Live monitoring console with real-time alerts")
-app.add_typer(live_app, name="live")
-
-weekly_app = typer.Typer(add_completion=False, help="Weekly performance reports and summaries")
-app.add_typer(weekly_app, name="weekly")
-
-# ---------------------------------------------------------------------------
-# Power-user tools under `lox labs ...`
-# ---------------------------------------------------------------------------
-labs_app = typer.Typer(
-    add_completion=False, 
-    help="""Deep research tools: regime analysis, Monte Carlo, ticker outlook.
-
-\b
-REGIMES:
-  lox labs vol --llm         Volatility regime with LLM analysis
-  lox labs fiscal snapshot   US fiscal data (deficits, issuance, TGA)
-  lox labs funding snapshot  Funding markets (SOFR, repo, reserves)
-  lox labs rates snapshot    Rates/yield curve analysis
-
-\b
-SCENARIOS:
-  lox labs mc-v01 --real     Monte Carlo with live positions
-  lox labs hedge             Defensive trade ideas
-  lox labs grow              Offensive trade ideas
-
-\b
-TICKERS:
-  lox labs ticker outlook -t AAPL   Ticker outlook with regime context
-  lox labs ticker news -t NVDA      Recent news for ticker
-"""
-)
+# Labs - advanced/power user
+labs_app = typer.Typer(add_completion=False, help="Advanced research tools (power users)")
 app.add_typer(labs_app, name="labs")
-macro_app = typer.Typer(add_completion=False, help="Macro signals and datasets")
+
+# Hidden/legacy subgroups for labs
+macro_app = typer.Typer(add_completion=False, help="Macro signals")
 labs_app.add_typer(macro_app, name="macro")
-tariff_app = typer.Typer(add_completion=False, help="Tariff / cost-push regime signals")
+tariff_app = typer.Typer(add_completion=False, help="Tariff regime")
 labs_app.add_typer(tariff_app, name="tariff")
-funding_app = typer.Typer(add_completion=False, help="Funding markets (SOFR, repo spreads) — price of money in daily markets")
+funding_app = typer.Typer(add_completion=False, help="Funding markets")
 labs_app.add_typer(funding_app, name="funding")
-usd_app = typer.Typer(add_completion=False, help="USD strength/weakness regime")
+usd_app = typer.Typer(add_completion=False, help="USD regime")
 labs_app.add_typer(usd_app, name="usd")
-monetary_app = typer.Typer(add_completion=False, help="Fed liquidity (reserves, balance sheet, RRP) — quantity of money in system")
+monetary_app = typer.Typer(add_completion=False, help="Fed liquidity")
 labs_app.add_typer(monetary_app, name="monetary")
-rates_app = typer.Typer(add_completion=False, help="Rates / yield curve regime (UST level/slope/momentum)")
+rates_app = typer.Typer(add_completion=False, help="Rates regime")
 labs_app.add_typer(rates_app, name="rates")
-fiscal_app = typer.Typer(add_completion=False, help="US fiscal regime (deficits, issuance mix, auctions, TGA)")
+fiscal_app = typer.Typer(add_completion=False, help="Fiscal regime")
 labs_app.add_typer(fiscal_app, name="fiscal")
-vol_app = typer.Typer(add_completion=False, help="Volatility regime (VIX: level/momentum/term structure)")
+vol_app = typer.Typer(add_completion=False, help="Volatility regime")
 labs_app.add_typer(vol_app, name="volatility")
-commod_app = typer.Typer(add_completion=False, help="Commodities regime (oil/gold/broad index)")
+commod_app = typer.Typer(add_completion=False, help="Commodities")
 labs_app.add_typer(commod_app, name="commodities")
-crypto_app = typer.Typer(add_completion=False, help="Crypto snapshots and LLM outlooks")
+crypto_app = typer.Typer(add_completion=False, help="Crypto")
 labs_app.add_typer(crypto_app, name="crypto")
-ticker_app = typer.Typer(add_completion=False, help="Ticker snapshots and LLM outlooks")
+ticker_app = typer.Typer(add_completion=False, help="Ticker analysis")
 labs_app.add_typer(ticker_app, name="ticker")
-housing_app = typer.Typer(add_completion=False, help="Housing / MBS regime (mortgage spreads + housing proxies)")
+housing_app = typer.Typer(add_completion=False, help="Housing regime")
 labs_app.add_typer(housing_app, name="housing")
-household_app = typer.Typer(add_completion=False, help="Household wealth regime (MMT sectoral balances: where deficit dollars flow)")
+household_app = typer.Typer(add_completion=False, help="Household wealth")
 labs_app.add_typer(household_app, name="household")
-news_app = typer.Typer(add_completion=False, help="News sentiment regime (aggregate market news sentiment)")
+news_app = typer.Typer(add_completion=False, help="News sentiment")
 labs_app.add_typer(news_app, name="news")
-solar_app = typer.Typer(add_completion=False, help="Solar / silver regime (solar basket vs SLV)")
+solar_app = typer.Typer(add_completion=False, help="Solar regime")
 labs_app.add_typer(solar_app, name="solar")
-silver_app = typer.Typer(add_completion=False, help="Silver / SLV regime (price, technicals, GSR)")
+silver_app = typer.Typer(add_completion=False, help="Silver regime")
 labs_app.add_typer(silver_app, name="silver")
-track_app = typer.Typer(add_completion=False, help="Track recommendations, executions, and performance")
+track_app = typer.Typer(add_completion=False, help="Tracking")
 labs_app.add_typer(track_app, name="track")
+
+# Additional apps needed for registration
+model_app = typer.Typer(add_completion=False, help="ML models")
+app.add_typer(model_app, name="model")
+live_app = typer.Typer(add_completion=False, help="Live monitoring")
+app.add_typer(live_app, name="live")
+weekly_app = typer.Typer(add_completion=False, help="Weekly reports")
+app.add_typer(weekly_app, name="weekly")
+autopilot_app = trade_app  # Alias for backward compat
 
 _COMMANDS_REGISTERED = False
 
@@ -165,7 +333,6 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.options.options_pick_cmd import register_pick
     from ai_options_trader.cli_commands.options.options_scanner_cmd import register_scanners
     from ai_options_trader.cli_commands.options.options_moonshot_cmd import register_moonshot
-    from ai_options_trader.cli_commands.options.options_scan_cmd import register_scan_commands
     
     # Analysis commands
     from ai_options_trader.cli_commands.analysis.scenarios_cmd import register as register_scenarios
@@ -174,6 +341,7 @@ def _register_commands() -> None:
     from ai_options_trader.cli_commands.analysis.ticker_cmd import register as register_ticker
     from ai_options_trader.cli_commands.analysis.deep_cmd import register as register_deep
     from ai_options_trader.cli_commands.analysis.stress_cmd import register_stress
+    from ai_options_trader.cli_commands.analysis.fundamentals_cmd import register as register_fundamentals
     
     # Ideas commands
     from ai_options_trader.cli_commands.ideas.ideas_cmd import register as register_ideas_legacy
@@ -193,11 +361,10 @@ def _register_commands() -> None:
     register_closed_trades(app)  # Closed trades P&L
     
     # Options: modular command registration
-    register_options(options_app)       # scan, most-traded
+    register_options(options_app)       # scan, best, most-traded, high-oi, deep
     register_pick(options_app)          # pick
     register_scanners(options_app)      # sp500-under-budget, etf-under-budget
     register_moonshot(options_app)      # moonshot
-    register_scan_commands(options_app) # Additional scan commands
     
     # Ideas: new clean commands + legacy for back-compat
     register_ideas_clean(ideas_app)  # catalyst, screen
@@ -240,6 +407,7 @@ def _register_commands() -> None:
     register_solar(solar_app)
     register_silver(silver_app)
     register_bubble_finder(labs_app)  # Bubble finder scanner
+    register_fundamentals(labs_app)  # CFA-level financial modeling
     
     # Quick pillar access under labs
     register_pillar_commands(labs_app)

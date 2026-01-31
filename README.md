@@ -16,6 +16,27 @@ Lox Capital is operated by Jeff Larson and is a **discretionary macro portfolio*
 
 ---
 
+## Quick Start
+
+```bash
+# Daily workflow
+lox status                    # Portfolio health
+lox dashboard                 # All regimes at a glance
+
+# Research a ticker
+lox research -t NVDA          # Deep research
+lox scan -t NVDA --want put   # Options chain
+
+# Check regimes
+lox regime vol                # Volatility regime
+lox regime fiscal             # Fiscal regime
+
+# Scenarios
+lox scenario monte-carlo      # Monte Carlo simulation
+```
+
+---
+
 ## Technical Documentation
 
 For reviewers and due diligence, comprehensive technical documentation is available:
@@ -119,71 +140,48 @@ Every morning begins with the **live web dashboard** for real-time portfolio and
 - Review Palmer's regime analysis and traffic lights
 - Check Monte Carlo 6-month forecast
 - Review position-level theories and P&L attribution
-- Monitor today's economic releases
 
 **CLI Research** (Deep Dive):
 ```bash
-lox dashboard                    # Unified view: inflation, growth, liquidity, vol
-lox labs rates snapshot --llm    # PhD-level rates/curve analysis
-lox labs vol --llm               # Volatility regime with scenario probabilities
+lox status                   # Portfolio health
+lox dashboard                # All regimes at a glance
+lox regime vol --llm         # Volatility with LLM analysis
 ```
-
-The dashboard surfaces:
-- **Portfolio Health**: NAV, unrealized P&L, cash available
-- **Performance Attribution**: Fund return vs S&P 500 and BTC with alpha
-- **Regime Status**: Real-time classification (RISK-ON/CAUTIOUS/RISK-OFF)
-- **Volatility Context**: VIX level with percentile and regime implications
-- **Credit Conditions**: HY spreads with stress indicators
-- **Rates Environment**: 10Y yield with historical context
-- **Economic Calendar**: Today's releases with actual vs estimate
-- **Portfolio News**: Position-relevant headlines
 
 ### 2. Deep Research
 Before any trade, I conduct multi-source analysis:
 
-**Ticker-Level Research** (Primary):
+**Ticker-Level Research**:
 ```bash
-lox labs ticker deep -t FXI --llm     # Full ETF analysis: holdings, flows, institutional holders
-lox labs ticker deep -t AAPL --llm    # Full stock analysis: earnings, estimates, SEC filings
-lox chat -t FXI                        # Interactive discussion with research context loaded
+lox research -t NVDA              # Deep ticker research
+lox research -t AAPL --llm        # With LLM analysis
+lox chat -t FXI                   # Interactive discussion
 ```
 
-**Macro Research**:
+**Regime Research**:
 ```bash
-lox labs commodities snapshot --llm   # Oil, gold, copper with news synthesis
-lox labs growth snapshot --llm        # Employment trends with probability scenarios
-lox monetary fedfunds-outlook         # Fed policy outlook with historical analogs
+lox regime vol                    # Volatility regime
+lox regime fiscal                 # Fiscal (deficits, TGA)
+lox regime rates                  # Rates/curve analysis
+lox regime macro                  # Macro overview
 ```
 
-Each `--llm` report provides:
-- **Probability-weighted scenarios** (Bull/Base/Bear with specific targets)
-- **Event-driven catalyst calendar** (impact estimates for upcoming releases)
-- **Cross-asset trade expressions** (sector ETFs, not just the obvious plays)
-- **Historical analogs** with what's different this time
-- **News synthesis** with source citations
-
-### 3. Idea Generation
-The platform generates trade ideas as **starting points for analysis**, not execution signals:
+### 3. Options Scanning
+Find options for trade ideas:
 
 ```bash
-lox suggest --style defensive    # Ideas aligned to risk posture
-lox labs hedge                   # Portfolio-aware defensive ideas
-lox labs grow                    # Regime-aligned offensive ideas
+lox scan -t NVDA --want put       # Options chain (30-365 DTE default)
+lox scan -t CRWV --min-days 100   # Long-dated options
+lox options best NVDA --budget 500  # Best under budget
 ```
-
-Every idea is evaluated against:
-- Current portfolio Greeks and exposures
-- Regime alignment and conviction level
-- Risk/reward with explicit targets and stops
 
 ### 4. Risk Analysis
 Before execution, stress-test the portfolio:
 
 ```bash
-lox labs mc-v01 --regime RISK_OFF --real    # Crash scenario (-25% drift)
-lox labs mc-v01 --regime VOL_CRUSH --real   # Hedge drag scenario
-lox labs mc-v01 --regime SLOW_BLEED --real  # Death by 1000 cuts
-lox analyze --depth deep                     # Full position analysis
+lox scenario monte-carlo          # Monte Carlo simulation
+lox scenario stress               # Stress testing
+lox analyze --depth deep          # Full position analysis
 ```
 
 ### 5. Execution Decision
@@ -319,62 +317,91 @@ lox labs transitions --no-adjust  # Raw historical frequencies
 
 ## Research Capabilities
 
-### Regime Dashboard
+### Regime Analysis
 ```bash
-lox dashboard                     # All pillars at a glance
-lox dashboard --focus inflation   # Deep-dive with component breakdown
-lox dashboard --features          # Export metrics as ML features
+lox regime vol                    # Volatility regime
+lox regime vol --llm              # With LLM analysis
+lox regime fiscal                 # Fiscal (deficits, TGA)
+lox regime funding                # Funding markets (SOFR)
+lox regime rates                  # Rates/yield curve
+lox regime macro                  # Macro overview
 ```
 
-### LLM Research Briefs
+### Ticker Research
 ```bash
-lox labs vol --llm                # Volatility regime analysis
-lox labs rates snapshot --llm     # Rates/curve analysis  
-lox labs commodities snapshot --llm
-lox labs inflation snapshot --llm
-lox labs growth snapshot --llm
-lox labs liquidity snapshot --llm
+lox research -t NVDA              # Deep ticker research
+lox research -t AAPL --llm        # With LLM analysis
 ```
 
-Each brief includes:
-- Regime status with confidence level
-- Key metrics with percentiles and z-scores
-- News synthesis with citations [1], [2], etc.
-- Scenario analysis with probability weights
-- Cross-asset trade expressions with sector implications
-- Historical context and analogs
-
-### Monte Carlo Scenarios
+### Options Scanning
 ```bash
-lox labs mc-v01 --regime RISK_OFF --real     # -25% equity shock
-lox labs mc-v01 --regime VOL_CRUSH --real    # VIX collapse to 10
-lox labs mc-v01 --regime SLOW_BLEED --real   # Persistent -5% drift
-lox labs mc-v01 --regime STAGFLATION --real  # Inflation + growth shock
-lox labs mc-v01 --regime ALL --real          # 6-month baseline
+lox scan -t NVDA                  # Default: puts, 30-365 DTE
+lox scan -t CRWV --want put --min-days 100 --max-days 400
+lox options best NVDA --budget 500
+```
+
+### Scenario Analysis
+```bash
+lox scenario monte-carlo          # Monte Carlo simulation
+lox scenario stress               # Stress testing
+```
+
+### Advanced Tools (Power Users)
+```bash
+lox labs ticker deep -t AAPL --llm    # Full ticker deep dive
+lox labs mc-v01 --regime RISK_OFF     # Specific regime scenario
+lox labs unified                       # All 10 regimes
 ```
 
 ---
 
 ## Quick Reference
 
+### CLI Structure
+
+```
+lox                           # Help with examples
+├── scan -t TICKER            # Options chain scanner
+├── research -t TICKER        # Deep ticker research
+├── status                    # Portfolio health
+├── dashboard                 # All regimes at a glance
+│
+├── regime                    # Economic regime analysis
+│   ├── vol                   # Volatility (VIX)
+│   ├── fiscal                # Fiscal (deficits, TGA)
+│   ├── funding               # Funding markets (SOFR)
+│   ├── rates                 # Yield curve
+│   └── macro                 # Macro overview
+│
+├── scenario                  # Portfolio scenarios
+│   ├── monte-carlo           # Monte Carlo simulation
+│   └── stress                # Stress testing
+│
+├── trade                     # Trade execution
+├── ideas                     # Trade ideas
+├── chat                      # Interactive research chat
+├── options                   # Full options toolset
+└── labs                      # Advanced tools (power users)
+```
+
 ### Daily Workflow
 ```bash
 # Morning: Dashboard review (5 min)
-# → Open web dashboard in browser
-# → Review Palmer's regime analysis
-# → Check Monte Carlo forecast
-# → Review position theories
+lox status                    # Portfolio health
+lox dashboard                 # All regimes at a glance
 
-# CLI: Deep research (as needed)
-lox status
-lox labs vol --llm
-lox labs rates snapshot --llm
+# Research (as needed)
+lox research -t NVDA          # Deep ticker research
+lox regime vol                # Volatility regime
+lox regime fiscal             # Fiscal regime
 
-# Ideas: Starting points for analysis
-lox suggest --style defensive
+# Options scanning
+lox scan -t CRWV --want put   # Options chain
+lox scan -t NVDA --min-days 60 --max-days 180
 
-# Risk: Pre-trade stress test
-lox labs mc-v01 --regime RISK_OFF --real
+# Ideas and scenarios
+lox suggest                   # Trade ideas
+lox scenario monte-carlo      # Monte Carlo simulation
 
 # EOD: Record NAV
 lox nav snapshot
@@ -386,38 +413,39 @@ lox nav snapshot
 | **Production** | [**loxfund.com**](https://loxfund.com) | Direct browser access |
 | **Local** | http://localhost:5001 | `cd dashboard && python app.py` |
 
-### Portfolio Commands
+### Core Commands
 | Command | Purpose |
 |---------|---------|
-| **Web Dashboard** | Real-time portfolio analytics, Palmer analysis, Monte Carlo forecast |
-| `lox status` | Portfolio health at a glance (CLI) |
-| `lox status -v` | With position details |
-| `lox analyze --depth deep` | Full LLM analysis |
-| `lox nav snapshot` | Record current NAV |
-| `lox account summary` | Account + positions + P&L |
+| `lox status` | Portfolio health at a glance |
+| `lox dashboard` | All regime pillars |
+| `lox scan -t TICKER` | Options chain scanner |
+| `lox research -t TICKER` | Deep ticker research |
+| `lox regime vol` | Volatility regime |
+| `lox regime fiscal` | Fiscal regime |
+| `lox scenario monte-carlo` | Monte Carlo simulation |
 
 ### Research Commands
 | Command | Purpose |
 |---------|---------|
-| `lox labs ticker deep -t AAPL --llm` | **Deep ticker analysis** — primary research driver |
-| `lox dashboard` | All regime pillars |
-| `lox labs vol --llm` | Volatility research brief |
-| `lox labs rates snapshot --llm` | Rates/curve analysis |
-| `lox labs mc-v01 --real` | Monte Carlo scenarios |
-| `lox labs ticker outlook -t AAPL` | Ticker outlook with regime context |
+| `lox research -t AAPL` | Deep ticker research |
+| `lox research -t NVDA --llm` | With LLM analysis |
+| `lox regime vol --llm` | Volatility with LLM |
+| `lox regime rates` | Rates/curve analysis |
+| `lox labs ticker deep -t AAPL` | Full ticker deep dive (legacy) |
+
+### Options Commands
+| Command | Purpose |
+|---------|---------|
+| `lox scan -t NVDA` | Options chain (default: puts, 30-365 DTE) |
+| `lox scan -t CRWV --want put --min-days 100` | Custom DTE range |
+| `lox options best NVDA --budget 500` | Best options under budget |
 
 ### Interactive Chat
 | Command | Purpose |
 |---------|---------|
-| `lox chat` | Interactive research chat (default: portfolio context) |
-| `lox chat -t AAPL` | **Ticker-focused chat** — deep research context loaded |
-| `lox chat -t FXI` | ETF-focused chat with holdings, flows, institutional data |
-| `lox chat -c fiscal` | Chat with fiscal regime data loaded |
-| `lox chat -c funding` | Chat with funding/liquidity context |
-| `lox chat -c macro` | Chat with macro regime context |
-| `lox chat -c regimes` | Chat with all regimes loaded |
-
-The `-t` ticker option loads comprehensive research data (profile, earnings, news, SEC filings, analyst targets) into the conversation context for focused analysis.
+| `lox chat` | Interactive research chat |
+| `lox chat -t AAPL` | Ticker-focused chat |
+| `lox chat -c fiscal` | Chat with regime context |
 
 ---
 
@@ -516,37 +544,38 @@ The dashboard requires:
 
 ```
 lox/
+├── Top-Level Commands (Daily Use)
+│   ├── scan           → Options chain scanner
+│   ├── research       → Deep ticker research
+│   ├── status         → Portfolio health
+│   ├── dashboard      → All regimes at a glance
+│   ├── regime *       → Economic regime analysis
+│   └── scenario *     → Portfolio scenarios
+│
 ├── Web Dashboard (Primary Interface)
 │   ├── Real-time portfolio analytics
 │   ├── Palmer macro intelligence
 │   ├── Monte Carlo forecast
 │   ├── Position-level LLM theories
-│   ├── Economic calendar integration
-│   └── Portfolio-contextual news
+│   └── Economic calendar integration
 │
-├── Research Layer (CLI)
-│   ├── dashboard      → Unified regime classification
-│   ├── labs *         → PhD-level research briefs (--llm)
-│   └── mc-v01         → Monte Carlo scenario analysis
-│
-├── Portfolio Layer
-│   ├── status         → Fast portfolio health
-│   ├── analyze        → Risk analysis
-│   ├── suggest        → Trade idea generation
-│   └── nav            → NAV tracking & investor reporting
+├── Subgroups
+│   ├── options        → Full options toolset
+│   ├── trade          → Trade execution
+│   ├── ideas          → Trade idea generation
+│   ├── chat           → Interactive research
+│   └── labs           → Advanced tools (power users)
 │
 ├── Data Layer
 │   ├── FRED           → Macro time series
-│   ├── Alpaca         → Market data + positions + news
+│   ├── Alpaca         → Market data + positions
 │   ├── FMP            → News + calendar + quotes
-│   ├── Trading Economics → Economic calendar (primary)
-│   └── Unified News   → Aggregated + deduplicated
+│   └── Polygon        → Options data (OI, greeks)
 │
 └── Analysis Layer
-    ├── Regime pillars → Inflation, growth, liquidity, vol
-    ├── Sector maps    → Cross-asset implications
-    ├── LLM analyst    → Research synthesis + scenarios
-    └── Position theories → Macro-aware position analysis
+    ├── Regime pillars → Vol, fiscal, funding, rates, macro
+    ├── LLM analyst    → Research synthesis
+    └── Scenarios      → Monte Carlo, stress testing
 ```
 
 ---

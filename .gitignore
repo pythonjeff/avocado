@@ -19,6 +19,9 @@ data/tracker.sqlite3
 data/tracker.sqlite3-shm
 data/tracker.sqlite3-wal
 
+# Source code cache
+src/ai_options_trader/data/cache/
+
 # Dashboard cache
 dashboard/data/cache/
 
