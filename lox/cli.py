@@ -205,6 +205,11 @@ app.add_typer(regime_app, name="regime")
 crypto_app = typer.Typer(add_completion=False, help="Crypto perps: data, research, trading")
 app.add_typer(crypto_app, name="crypto")
 
+# Quiver Quantitative — congressional / contracts / flow bundle
+from lox.cli_commands.quiver_cmd import app as quiver_app
+app.add_typer(quiver_app, name="quiver")
+app.add_typer(quiver_app, name="q")
+
 
 # ── Keep regimes ──────────────────────────────────────────────────────────
 @regime_app.command("vol")
