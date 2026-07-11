@@ -5,7 +5,11 @@ from rich import print
 from rich.table import Table
 from rich.text import Text
 
-from lox.bubble.history import HISTORICAL_BUBBLES
+from lox.bubble.history import (
+    HISTORICAL_BUBBLES,
+    compute_similarity,
+    format_recover_months,
+)
 from lox.cli_commands.shared.regime_display import render_regime_panel
 from lox.config import load_settings
 
@@ -384,64 +388,152 @@ def _print_historical_table(
     top10_share_pct: float | None,
     margin_to_gdp_pct: float | None,
 ) -> None:
-    """Render a comparison of today's key metrics vs prior bubble peaks."""
+    """
+    Render the bubble peak comparison: US + international, with CAPE,
+    household-equity %, post-peak drawdown / recovery, plus a similarity
+    ranking of today vs US peaks.
+    """
     t = Table(
         title="Historical bubble comparison",
         show_header=True, header_style="bold dim",
-        box=None, padding=(0, 2),
+        box=None, padding=(0, 1),
         title_style="bold",
-        caption="Buffett indicator = total market cap / GDP. "
-                "Margin/GDP normalizes the leverage figure for inflation and growth. "
-                "Cells in red = today exceeds that peak.",
+        caption=(
+            "Buffett indicator = corp-equities mkt value / GDP.  "
+            "CAPE = Shiller cyclically-adjusted P/E at peak.  "
+            "HHEq% = household equities as % of financial assets.  "
+            "DD = peak-to-trough drawdown; Recov = months to nominal new high.  "
+            "Red cells = today exceeds that peak."
+        ),
         caption_style="dim",
     )
-    t.add_column("Era",            style="bold")
-    t.add_column("Buffett",        justify="right")
-    t.add_column("Top-10 share",   justify="right")
-    t.add_column("Margin/GDP",     justify="right")
-    t.add_column("Note",           style="dim")
+    t.add_column("Era",         style="bold", min_width=22)
+    t.add_column("Rgn",         justify="center", style="dim", width=3)
+    t.add_column("Buffett",     justify="right")
+    t.add_column("CAPE",        justify="right")
+    t.add_column("Top-10",      justify="right")
+    t.add_column("Margin",      justify="right")
+    t.add_column("HHEq%",       justify="right")
+    t.add_column("DD",          justify="right")
+    t.add_column("Recov",       justify="right")
 
-    for peak in HISTORICAL_BUBBLES:
-        t.add_row(
-            peak.name,
-            _fmt_or_na(peak.buffett_pct,      suffix="%",  fmt="{:.0f}"),
-            _fmt_or_na(peak.top10_share_pct,  suffix="%",  fmt="{:.0f}"),
-            _fmt_or_na(peak.margin_to_gdp_pct, suffix="%", fmt="{:.1f}"),
-            peak.note,
-        )
-
-    # Today row, with highlighting where we already beat the prior peak.
-    def _cell(today: float | None, suffix: str, fmt: str) -> str:
-        if today is None:
-            return "—"
-        val = fmt.format(today) + suffix
-        # Compare to the worst prior bubble for each metric to set "exceeded" colour.
-        peaks = [p for p in HISTORICAL_BUBBLES
-                 if (suffix == "%" and fmt == "{:.0f}" and p.buffett_pct is not None)
-                 or (suffix == "%" and fmt == "{:.1f}" and p.margin_to_gdp_pct is not None)
-                 or (suffix == "%" and fmt == "{:.0f}" and p.top10_share_pct is not None)]
-        return val  # leave plain — we'll mark exceeded peaks with row text
-
-    # Find max prior peak per metric for colouring.
+    # Find max prior peak per metric for "today exceeded" highlighting.
     max_buffett = max((p.buffett_pct for p in HISTORICAL_BUBBLES if p.buffett_pct is not None), default=None)
     max_top10 = max((p.top10_share_pct for p in HISTORICAL_BUBBLES if p.top10_share_pct is not None), default=None)
     max_margin = max((p.margin_to_gdp_pct for p in HISTORICAL_BUBBLES if p.margin_to_gdp_pct is not None), default=None)
+    max_cape = max((p.cape for p in HISTORICAL_BUBBLES if p.cape is not None), default=None)
 
-    def _marked(today: float | None, peak: float | None, suffix: str, fmt: str) -> str:
+    def _region_tag(region: str) -> str:
+        # Two-letter codes — width-stable across terminals (emoji flags break
+        # column widths in many terminals). Color codes the corridor.
+        codes = {"US": "[cyan]US[/cyan]", "Japan": "[magenta]JP[/magenta]", "China": "[red]CN[/red]"}
+        return codes.get(region, region)
+
+    def _dd_cell(dd: float | None) -> str:
+        if dd is None:
+            return "—"
+        # Worse drawdowns = redder
+        if dd <= -70:
+            return f"[bold red]{dd:.0f}%[/bold red]"
+        if dd <= -45:
+            return f"[red]{dd:.0f}%[/red]"
+        if dd <= -25:
+            return f"[yellow]{dd:.0f}%[/yellow]"
+        return f"{dd:.0f}%"
+
+    for peak in HISTORICAL_BUBBLES:
+        # International peaks are italicized so the reader knows they're
+        # cross-corridor context, not similarity candidates.
+        name_cell = peak.name if peak.region == "US" else f"[italic]{peak.name}[/italic]"
+        t.add_row(
+            name_cell,
+            _region_tag(peak.region),
+            _fmt_or_na(peak.buffett_pct,       suffix="%",  fmt="{:.0f}"),
+            _fmt_or_na(peak.cape,              suffix="",   fmt="{:.0f}"),
+            _fmt_or_na(peak.top10_share_pct,   suffix="%",  fmt="{:.0f}"),
+            _fmt_or_na(peak.margin_to_gdp_pct, suffix="%",  fmt="{:.1f}"),
+            _fmt_or_na(peak.hh_equity_pct,     suffix="%",  fmt="{:.0f}"),
+            _dd_cell(peak.drawdown_pct),
+            format_recover_months(peak.recover_months),
+        )
+
+    def _marked(today: float | None, peak_max: float | None, suffix: str, fmt: str) -> str:
         if today is None:
             return "—"
         v = fmt.format(today) + suffix
-        color = _hot_color(today, peak)
+        color = _hot_color(today, peak_max)
         return f"[{color}]{v}[/{color}]" if color else v
 
     today_row = [
         "[bold cyan]Today[/bold cyan]",
-        _marked(buffett_pct,        max_buffett, "%", "{:.0f}"),
-        _marked(top10_share_pct,    max_top10,   "%", "{:.0f}"),
-        _marked(margin_to_gdp_pct,  max_margin,  "%", "{:.1f}"),
-        "current bubble regime read",
+        _region_tag("US"),
+        _marked(buffett_pct,       max_buffett, "%", "{:.0f}"),
+        "—",  # CAPE — not yet computed live
+        _marked(top10_share_pct,   max_top10,   "%", "{:.0f}"),
+        _marked(margin_to_gdp_pct, max_margin,  "%", "{:.1f}"),
+        "—",  # HHEq% — not yet computed live
+        "—",  # No drawdown yet (we're not post-peak)
+        "—",
     ]
     t.add_row(*[Text.from_markup(c) if isinstance(c, str) and "[" in c else c for c in today_row])
 
     print(Text(""))
     print(t)
+
+    # ── Pattern legend (moved out of the table so it fits 80-col terminals) ──
+    print(Text(""))
+    print(Text.from_markup("[bold dim]Pattern[/bold dim]"))
+    for peak in HISTORICAL_BUBBLES:
+        # Compact two-line format: name → pattern. Italicize international.
+        label = peak.name if peak.region == "US" else f"[italic]{peak.name}[/italic]"
+        print(Text.from_markup(f"  [dim]·[/dim] {label}: [dim]{peak.note}[/dim]"))
+
+    # ── Similarity ranking — which US peak does today most resemble? ─────
+    _print_similarity_block(buffett_pct, top10_share_pct, margin_to_gdp_pct)
+
+
+def _print_similarity_block(
+    buffett_pct: float | None,
+    top10_share_pct: float | None,
+    margin_to_gdp_pct: float | None,
+) -> None:
+    """
+    Print 'Today most resembles ...' ranking using the metrics we have live.
+
+    Only the top 3 US peaks are surfaced — anything below that is noise.
+    """
+    today = {
+        "buffett_pct": buffett_pct,
+        "top10_share_pct": top10_share_pct,
+        "margin_to_gdp_pct": margin_to_gdp_pct,
+    }
+    results = compute_similarity(today)
+    if not results:
+        return
+
+    top = results[:3]
+
+    print(Text(""))
+    print(Text.from_markup(
+        "[bold]Today most resembles[/bold]  [dim](US peaks only — scored across "
+        "Buffett, top-10 share, margin/GDP)[/dim]"
+    ))
+
+    # Inline visual: similarity score as a small bar
+    def _bar(sim: float, width: int = 16) -> str:
+        filled = int(round(sim * width))
+        filled = max(0, min(width, filled))
+        return f"[green]{'█' * filled}[/green][dim]{'░' * (width - filled)}[/dim]"
+
+    for i, r in enumerate(top):
+        rank_marker = "▸▸" if i == 0 else "▸"
+        sim_pct = r.similarity * 100
+        print(Text.from_markup(
+            f"  {rank_marker} {r.peak_name:<26}  {_bar(r.similarity)}  {sim_pct:.0f}%"
+        ))
+
+    # One-line interpretive cap based on the top match
+    best = top[0]
+    if best.similarity > 0.85:
+        verdict = f"[bold]→ playbook: {best.peak_name.split('—')[1].strip() if '—' in best.peak_name else best.peak_name}[/bold]"
+        print(Text.from_markup(f"  [dim]{verdict}[/dim]"))

@@ -84,8 +84,13 @@ def build_brief(
             ticker_sources.setdefault(b.ticker, set()).add("insider")
 
     if otc_short.have_data:
-        # Only count the very top OTC short spikes (>55% share) as a signal,
-        # since OTC short is a contrarian indicator (high share precedes squeezes)
+        # Only count the very top OTC short spikes (>55% share) as a signal.
+        # NOTE: the "high share precedes squeezes" read is an unvalidated
+        # hypothesis, not a documented fact. FINRA off-exchange short volume
+        # is largely market-maker/internalizer legs offsetting retail
+        # marketable *buy* orders, so a high share can coincide with retail
+        # buying pressure rather than net-short positioning. Treat this as
+        # confirmation-only (like WSB) until backtested on our own data.
         for r in otc_short.spikes[:5]:
             if r.short_share >= 0.55:
                 ticker_sources.setdefault(r.ticker, set()).add("otc-short-spike")

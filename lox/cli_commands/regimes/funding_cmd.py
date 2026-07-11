@@ -12,6 +12,7 @@ from lox.config import load_settings
 from lox.funding.features import funding_feature_vector
 from lox.funding.regime import classify_funding_regime
 from lox.funding.signals import FUNDING_FRED_SERIES, build_funding_state, build_funding_dataset
+from lox.funding.synthesis import FundingBrief, build_funding_brief
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -583,7 +584,7 @@ def _show_fed_bs_composition(console, refresh: bool):
 # Funding cross-correlations (within-stack)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _show_funding_correlations(console, refresh: bool):
+def _show_funding_correlations(console, refresh: bool, report: dict | None = None):
     """
     Cross-correlations within the funding stack:
       - 60d rolling pair correlations vs 3y baseline
@@ -592,14 +593,20 @@ def _show_funding_correlations(console, refresh: bool):
 
     The synthesis tells you *which mechanism is currently driving funding stress*
     rather than just showing levels.
+
+    `report` can be pre-computed (e.g., already fetched for the synthesis brief)
+    to avoid redundant correlation runs.
     """
     from rich.table import Table as RichTable
     from lox.funding.correlations import compute_funding_correlation_report
 
-    try:
-        rep = compute_funding_correlation_report(refresh=refresh)
-    except Exception:
-        return
+    if report is not None:
+        rep = report
+    else:
+        try:
+            rep = compute_funding_correlation_report(refresh=refresh)
+        except Exception:
+            return
 
     pairs = rep.get("pairs") or []
     lags = rep.get("lags") or []
@@ -778,6 +785,138 @@ def _show_equity_transmission(console, rep: dict) -> None:
                 console.print(
                     f"    [magenta]▸[/magenta] {l['name']}: [bold]{l['best_lag']}-day lead[/bold], corr {sign}{mag:.2f}  →  {l['interpretation']}"
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Synthesis brief — top-of-panel 3-line institutional readout
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LEAN_COLOR = {
+    "defensive": "red",
+    "neutral-defensive": "yellow",
+    "neutral": "white",
+    "neutral-constructive": "green",
+    "constructive": "bold green",
+}
+
+_LEAN_GLYPH = {
+    "defensive": "▼",
+    "neutral-defensive": "◆",
+    "neutral": "◇",
+    "neutral-constructive": "◆",
+    "constructive": "▲",
+}
+
+_CONVICTION_GLYPH = {
+    "high": "▸▸",
+    "moderate": "▸",
+    "low": "·",
+}
+
+
+def _show_funding_brief(console, brief: FundingBrief, asof: str) -> None:
+    """
+    Render the synthesis brief at the top of the funding panel.
+
+    Three-line institutional-style readout — regime, risk, trade — followed
+    by active signals and broken couplings as supporting context. Everything
+    here is derived from inputs computed for the data sections below; this is
+    purely a synthesis layer.
+    """
+    from rich.panel import Panel as RichPanel
+    from rich.console import Group
+    from rich.text import Text
+
+    lean_color = _LEAN_COLOR.get(brief.risk_lean, "white")
+    lean_glyph = _LEAN_GLYPH.get(brief.risk_lean, "◇")
+
+    lines: list = []
+
+    lines.append(Text.from_markup(f"[bold]REGIME[/bold]   {brief.regime_line}"))
+    lines.append(Text(""))
+    lines.append(Text.from_markup(
+        f"[bold]RISK[/bold]     [{lean_color}]{lean_glyph} {brief.risk_lean.upper()}[/{lean_color}]"
+    ))
+    lines.append(Text.from_markup(f"         {brief.risk_line}"))
+
+    # Active signals
+    if brief.active_signals:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]ACTIVE[/bold]"))
+        for sig in brief.active_signals:
+            lines.append(Text.from_markup(
+                f"  [cyan]▸[/cyan] {sig.name}  [dim]({sig.detail})[/dim]"
+            ))
+
+    # Broken couplings (only the meaningful ones)
+    if brief.broken_couplings:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]BROKEN[/bold]"))
+        for line in brief.broken_couplings:
+            lines.append(Text.from_markup(f"  [yellow]·[/yellow] {line}"))
+
+    # Offshore USD stress — only when watch+ level
+    if brief.offshore_label:
+        offshore_color = {
+            "watch": "yellow",
+            "stress": "red",
+            "crisis": "bold red",
+        }.get(brief.offshore_label, "yellow")
+        score_str = f" ({brief.offshore_score:.0f}/100)" if brief.offshore_score is not None else ""
+        lines.append(Text(""))
+        lines.append(Text.from_markup(
+            f"[bold]OFFSHORE[/bold]  [{offshore_color}]{brief.offshore_label.upper()}{score_str}[/{offshore_color}]"
+        ))
+        for d in brief.offshore_drivers:
+            lines.append(Text.from_markup(f"  [yellow]·[/yellow] {d}"))
+
+    # Trade ideas
+    if brief.trade_ideas:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]TRADE[/bold]"))
+        for idea in brief.trade_ideas:
+            glyph = _CONVICTION_GLYPH.get(idea.conviction, "▸")
+            color = "green" if idea.conviction == "high" else ("white" if idea.conviction == "moderate" else "dim")
+            lines.append(Text.from_markup(
+                f"  [{color}]{glyph}[/{color}] {idea.expression}"
+            ))
+            lines.append(Text.from_markup(
+                f"     [dim italic]↳ {idea.rationale}[/dim italic]"
+            ))
+
+    # Context notes
+    if brief.context_notes:
+        lines.append(Text(""))
+        for note in brief.context_notes:
+            lines.append(Text.from_markup(f"  [dim]· {note}[/dim]"))
+
+    panel = RichPanel(
+        Group(*lines),
+        title=f"[bold]Funding — Brief[/bold]  [dim]asof {asof}[/dim]",
+        title_align="left",
+        border_style="bold cyan",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+
+def _collect_cross_regime_scores() -> dict:
+    """Pull current scores for credit/vol/rates/growth from regime history."""
+    out: dict = {}
+    try:
+        from lox.data.regime_history import get_score_series
+        for domain in ("credit", "volatility", "rates", "growth"):
+            series = get_score_series(domain)
+            if not series:
+                continue
+            latest = series[-1]
+            sc = latest.get("score")
+            if not isinstance(sc, (int, float)):
+                continue
+            out[domain] = {"score": float(sc), "label": latest.get("label", "")}
+    except Exception:
+        pass
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1017,6 +1156,36 @@ def run_funding_snapshot(
     from lox.regimes.trend import get_domain_trend
     trend = get_domain_trend("liquidity", score, regime.label or regime.name)
 
+    # ── Synthesis brief (top-line institutional readout) ──────────────────
+    # Compute once, pass into both brief and the cross-correlation section
+    # below so we don't double-fetch the FRED dataset.
+    try:
+        from lox.funding.correlations import compute_funding_correlation_report
+        corr_rep = compute_funding_correlation_report(refresh=refresh)
+    except Exception:
+        corr_rep = {}
+    try:
+        from lox.funding.net_liquidity import compute_net_liquidity_metrics
+        nl_metrics_top = compute_net_liquidity_metrics(refresh=refresh)
+    except Exception:
+        nl_metrics_top = {}
+    try:
+        from lox.funding.offshore import compute_offshore_stress
+        offshore_state = compute_offshore_stress(refresh=refresh)
+    except Exception:
+        offshore_state = None
+    cross_scores = _collect_cross_regime_scores()
+
+    brief = build_funding_brief(
+        fi=fi,
+        regime=regime,
+        corr_rep=corr_rep,
+        cross_scores=cross_scores,
+        nl_metrics=nl_metrics_top,
+        offshore=offshore_state,
+    )
+    _show_funding_brief(console, brief, state.asof)
+
     print(render_regime_panel(
         domain="Funding",
         asof=state.asof,
@@ -1041,7 +1210,7 @@ def run_funding_snapshot(
     _show_fed_bs_composition(console, refresh)
 
     # ── Block 5: Funding cross-correlations (within-stack edge) ──────────
-    _show_funding_correlations(console, refresh)
+    _show_funding_correlations(console, refresh, report=corr_rep or None)
 
     # ── Block 6: Cross-regime signals ────────────────────────────────────
     _show_cross_regime_signals(console, fi, score)

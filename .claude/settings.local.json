@@ -86,7 +86,17 @@
       "Bash(zsh -c 'source ~/.zshrc 2>/dev/null; echo \"VIRTUAL_ENV=$VIRTUAL_ENV\" && which python')",
       "Bash(pytest tests/test_funding_correlations.py -x -q)",
       "Bash(pytest tests/test_funding_regime.py tests/test_funding_correlations.py -q)",
-      "Bash(pytest tests/test_funding_regime.py::test_funding_regime_tightening_when_spread_above_tight -q)"
+      "Bash(pytest tests/test_funding_regime.py::test_funding_regime_tightening_when_spread_above_tight -q)",
+      "Bash(pytest tests/test_funding_synthesis.py tests/test_funding_correlations.py -q)",
+      "Bash(pytest tests/test_funding_synthesis.py tests/test_funding_correlations.py tests/test_funding_offshore.py -q)",
+      "Bash(pytest tests/test_bubble_history.py -q)",
+      "Bash(pytest tests/test_bubble_history.py tests/test_funding_synthesis.py tests/test_funding_correlations.py tests/test_funding_offshore.py -q)",
+      "Bash(awk '{print $NF}')",
+      "WebFetch(domain:www.quiverquant.com)",
+      "Bash(python *)",
+      "Bash(lox q *)",
+      "Skill(schedule)",
+      "Bash(git *)"
     ]
   }
 }

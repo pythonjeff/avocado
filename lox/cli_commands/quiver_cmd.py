@@ -602,15 +602,16 @@ def _render_signals(console: Console, signals: list[QuiverSignal]) -> None:
         def _last(name: str) -> str:
             return name.split()[-1] if name != "Trump" else "Trump"
         names = [_last(o) for o in s.officials[:2]]
-        officials_str = ", ".join(names) + (f" +{len(s.officials)-2}" if len(s.officials) > 2 else "")
+        raw_officials = ", ".join(names) + (f" +{len(s.officials)-2}" if len(s.officials) > 2 else "")
+        officials_str = (raw_officials[:26] + "…") if len(raw_officials) > 26 else raw_officials
 
         line = RText()
         line.append(f"{s.avg_lag_days:2.0f}d  ", style="dim")
         line.append(f"{s.ticker:<6}", style="bold white")
         line.append(f"{s.side:<5}", style=side_style)
-        line.append(f"[{play} ATM 45d]  ", style="cyan")
         line.append(f"{alpha_str:>7}  ", style=alpha_style)
-        line.append(f"{_fmt_usd(s.total_usd):>6}  ", style="dim")
+        line.append(f"{_fmt_usd(s.total_usd):>7}", style="bold white")
+        line.append(f" ({s.cluster_count})  ", style="dim")
         line.append("▸" * filled, style="yellow")
         line.append("·" * (5 - filled) + "  ", style="dim")
         line.append(officials_str, style="dim")
@@ -618,7 +619,7 @@ def _render_signals(console: Console, signals: list[QuiverSignal]) -> None:
 
     console.print(Panel(
         Group(*lines),
-        title=f"[bold]Quiver Signals[/bold]  [dim]{len(signals)} signals · sorted by lag[/dim]",
+        title=f"[bold]Quiver Signals[/bold]  [dim]{len(signals)} signals · lag ↑  size ↓[/dim]",
         title_align="left",
         border_style="bold yellow",
         padding=(1, 2),

@@ -313,7 +313,7 @@ def build_signals(
             rationale=rationale,
         ))
 
-    signals.sort(key=lambda s: (s.avg_lag_days, -s.score))
+    signals.sort(key=lambda s: (s.avg_lag_days, -s.total_usd))
     if min_score > 0:
         signals = [s for s in signals if s.score >= min_score]
     return signals
