@@ -5,8 +5,9 @@ Metrics:
 - Fed Funds / IORB / SOFR
 - ON RRP balance
 - Bank reserves
+- Fed balance sheet (WALCL)
 - TGA balance
-- Net Liquidity Proxy
+- Net Liquidity Proxy (WALCL - TGA - RRP, Howell/Bianco definition)
 
 Author: Lox Capital Research
 """
@@ -113,18 +114,23 @@ class LiquidityPillar(RegimePillar):
         except Exception:
             pass
         
-        # Bank Reserves (WRESBAL)
+        # Bank Reserves (WRESBAL) — FRED reports this in $ millions, so the
+        # divisor to reach $T is 1e6, not 1e3 (that only reaches $B). The old
+        # /1000 left this metric (and its 3.0/3.5 thresholds, which *were*
+        # written in $T) off by 1000x — e.g. reading "$2944T" instead of
+        # "$2.94T", permanently past every threshold regardless of actual
+        # reserve scarcity.
         try:
             res_df = fred.fetch_series("WRESBAL", start_date="2020-01-01")
             if res_df is not None and not res_df.empty:
                 res_df = res_df.sort_values("date")
-                reserves = res_df["value"].iloc[-1] / 1000  # Convert to $T
-                
+                reserves = res_df["value"].iloc[-1] / 1_000_000  # $M -> $T
+
                 if len(res_df) > 4:
-                    delta_1m = (reserves - res_df["value"].iloc[-5] / 1000)
+                    delta_1m = (reserves - res_df["value"].iloc[-5] / 1_000_000)
                 else:
                     delta_1m = None
-                
+
                 self.metrics.append(Metric(
                     name="Bank Reserves",
                     value=reserves,
@@ -136,19 +142,44 @@ class LiquidityPillar(RegimePillar):
                 ))
         except Exception:
             pass
-        
-        # TGA (Treasury General Account)
+
+        # Fed Balance Sheet (WALCL) — also $ millions natively. This, not
+        # Bank Reserves, is the leg Net Liquidity below is built from (see
+        # _compute_net_liquidity for why).
+        try:
+            walcl_df = fred.fetch_series("WALCL", start_date="2020-01-01")
+            if walcl_df is not None and not walcl_df.empty:
+                walcl_df = walcl_df.sort_values("date")
+                walcl = walcl_df["value"].iloc[-1] / 1_000_000  # $M -> $T
+
+                if len(walcl_df) > 4:
+                    delta_1m = (walcl - walcl_df["value"].iloc[-5] / 1_000_000)
+                else:
+                    delta_1m = None
+
+                self.metrics.append(Metric(
+                    name="Fed Balance Sheet",
+                    value=walcl,
+                    unit="$T",
+                    delta_1m=delta_1m,
+                    source="FRED:WALCL",
+                ))
+        except Exception:
+            pass
+
+        # TGA (Treasury General Account) — same $M-native unit issue as
+        # Bank Reserves above; needs /1e6 to reach $T, not /1e3.
         try:
             tga_df = fred.fetch_series("WTREGEN", start_date="2020-01-01")
             if tga_df is not None and not tga_df.empty:
                 tga_df = tga_df.sort_values("date")
-                tga = tga_df["value"].iloc[-1] / 1000  # Convert to $T
-                
+                tga = tga_df["value"].iloc[-1] / 1_000_000  # $M -> $T
+
                 if len(tga_df) > 4:
-                    delta_1m = (tga - tga_df["value"].iloc[-5] / 1000)
+                    delta_1m = (tga - tga_df["value"].iloc[-5] / 1_000_000)
                 else:
                     delta_1m = None
-                
+
                 self.metrics.append(Metric(
                     name="TGA",
                     value=tga,
@@ -158,7 +189,7 @@ class LiquidityPillar(RegimePillar):
                 ))
         except Exception:
             pass
-        
+
         # Compute Net Liquidity Proxy
         self._compute_net_liquidity()
         
@@ -168,19 +199,30 @@ class LiquidityPillar(RegimePillar):
         self._compute_score()
     
     def _compute_net_liquidity(self) -> None:
-        """Compute Net Liquidity = Reserves + ON RRP - TGA."""
-        reserves = self.get_metric("Bank Reserves")
+        """
+        Compute Net Liquidity = Fed Balance Sheet (WALCL) - TGA - ON RRP —
+        the Howell/Bianco definition, matching lox.funding.net_liquidity and
+        lox.funding.correlations.
+
+        Previously this used Bank Reserves (WRESBAL) + RRP - TGA: wrong on
+        two counts. Reserves already nets out most of TGA/RRP's balance-sheet
+        impact, so reserves-based net liquidity double-subtracts those legs
+        and has ~zero correlation to the standard WALCL-based series. And the
+        RRP sign was flipped — rising RRP parks MMF cash at the Fed and
+        should *reduce* net liquidity, not add to it.
+        """
+        walcl = self.get_metric("Fed Balance Sheet")
         rrp = self.get_metric("ON RRP")
         tga = self.get_metric("TGA")
-        
-        if all(m and m.value is not None for m in [reserves, rrp, tga]):
-            net_liq = reserves.value + rrp.value - tga.value
-            
+
+        if all(m and m.value is not None for m in [walcl, rrp, tga]):
+            net_liq = walcl.value - tga.value - rrp.value
+
             # Compute delta
             delta_1m = None
-            if all(m.delta_1m is not None for m in [reserves, rrp, tga]):
-                delta_1m = reserves.delta_1m + rrp.delta_1m - tga.delta_1m
-            
+            if all(m.delta_1m is not None for m in [walcl, rrp, tga]):
+                delta_1m = walcl.delta_1m - tga.delta_1m - rrp.delta_1m
+
             self.metrics.append(Metric(
                 name="Net Liquidity",
                 value=net_liq,
