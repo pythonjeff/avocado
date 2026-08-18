@@ -829,15 +829,27 @@ def _show_funding_brief(console, brief: FundingBrief, asof: str) -> None:
 
     lean_color = _LEAN_COLOR.get(brief.risk_lean, "white")
     lean_glyph = _LEAN_GLYPH.get(brief.risk_lean, "◇")
+    conf_color = {"high": "green", "moderate": "yellow", "low": "red"}.get(brief.confidence, "white")
 
     lines: list = []
 
-    lines.append(Text.from_markup(f"[bold]REGIME[/bold]   {brief.regime_line}"))
+    lines.append(Text.from_markup(
+        f"[bold]REGIME[/bold]   {brief.regime_line}  "
+        f"[dim][{conf_color}]{brief.confidence.upper()} CONFIDENCE[/{conf_color}][/dim]"
+    ))
+    if brief.confidence_note:
+        lines.append(Text.from_markup(f"         [dim]· {brief.confidence_note}[/dim]"))
     lines.append(Text(""))
     lines.append(Text.from_markup(
         f"[bold]RISK[/bold]     [{lean_color}]{lean_glyph} {brief.risk_lean.upper()}[/{lean_color}]"
     ))
     lines.append(Text.from_markup(f"         {brief.risk_line}"))
+
+    # Equity translation — explicit forward SPX read off the Howell channel
+    if brief.equity_translation:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]EQUITY[/bold]"))
+        lines.append(Text.from_markup(f"  {brief.equity_translation}"))
 
     # Active signals
     if brief.active_signals:
@@ -848,12 +860,19 @@ def _show_funding_brief(console, brief: FundingBrief, asof: str) -> None:
                 f"  [cyan]▸[/cyan] {sig.name}  [dim]({sig.detail})[/dim]"
             ))
 
-    # Broken couplings (only the meaningful ones)
+    # Broken couplings — already showing up in the correlation data
     if brief.broken_couplings:
         lines.append(Text(""))
-        lines.append(Text.from_markup("[bold]BROKEN[/bold]"))
+        lines.append(Text.from_markup("[bold]BROKEN[/bold]  [dim](already in the data)[/dim]"))
         for line in brief.broken_couplings:
             lines.append(Text.from_markup(f"  [yellow]·[/yellow] {line}"))
+
+    # Forward risk flags — building but NOT yet showing in the corridor print
+    if brief.forward_risk_flags:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]FORWARD RISK[/bold]  [dim](not yet in the print)[/dim]"))
+        for line in brief.forward_risk_flags:
+            lines.append(Text.from_markup(f"  [magenta]·[/magenta] {line}"))
 
     # Offshore USD stress — only when watch+ level
     if brief.offshore_label:
@@ -883,6 +902,13 @@ def _show_funding_brief(console, brief: FundingBrief, asof: str) -> None:
             lines.append(Text.from_markup(
                 f"     [dim italic]↳ {idea.rationale}[/dim italic]"
             ))
+
+    # Data quality caveats — contemporaneous/wrong-signed/thin-sample reads
+    if brief.diagnostic_notes:
+        lines.append(Text(""))
+        lines.append(Text.from_markup("[bold]CAVEATS[/bold]"))
+        for note in brief.diagnostic_notes:
+            lines.append(Text.from_markup(f"  [dim]⚠ {note}[/dim]"))
 
     # Context notes
     if brief.context_notes:
@@ -1118,8 +1144,8 @@ def run_funding_snapshot(
         {"name": "TGA 4wk Δ", "value": _fmt_usd_bn(fi.tga_chg_4w) if fi.tga_chg_4w is not None else "n/a", "context": _tga_ctx(fi.tga_chg_4w)},
     ]
 
-    # ── Net liquidity composite (reserves − TGA − RRP) ────────────────────
-    # Daily-aligned aggregate of the three Structural inputs above. Gives the
+    # ── Net liquidity composite (WALCL − TGA − RRP, Howell/Bianco) ─────────
+    # Daily-aligned aggregate of Fed balance sheet, TGA, and RRP. Gives the
     # single number macro traders watch for risk-asset liquidity at 1-2w lag.
     from lox.funding.net_liquidity import compute_net_liquidity_metrics
     nl = compute_net_liquidity_metrics(refresh=refresh)
@@ -1135,7 +1161,7 @@ def run_funding_snapshot(
             "name": "Composite",
             "value": f"${nl['level_t']:,.2f}T",
             "change": d1_str,
-            "context": "reserves − TGA − RRP",
+            "context": "WALCL − TGA − RRP",
         })
 
         series_t = nl.get("series_30d_t") or []

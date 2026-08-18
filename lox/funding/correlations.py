@@ -308,9 +308,15 @@ def build_correlation_dataset(
         if col in out.columns:
             out[col] = out[col].ffill()
 
-    # Net liquidity composite ($T)
-    if all(c in out.columns for c in ("reserves_b", "tga_b", "rrp_b")):
-        out["net_liq_t"] = (out["reserves_b"] - out["tga_b"] - out["rrp_b"]) / 1000.0
+    # Net liquidity composite ($T) — Howell/Bianco definition: Fed balance
+    # sheet minus TGA minus ON RRP. Deliberately WALCL, not bank reserves
+    # (WRESBAL) — reserves already nets out most of TGA/RRP's balance-sheet
+    # impact, so reserves-TGA-RRP double-subtracts and produces a series with
+    # ~zero correlation to the standard WALCL-based net liquidity print (and
+    # a level ~$4T off from what's commonly quoted). This is the series the
+    # "Howell/Bianco" pair thesis below (EQUITY_PAIR_META) refers to.
+    if all(c in out.columns for c in ("walcl_b", "tga_b", "rrp_b")):
+        out["net_liq_t"] = (out["walcl_b"] - out["tga_b"] - out["rrp_b"]) / 1000.0
 
     # Week-over-week (Wed-to-Wed) changes for change-pair correlations.
     # This is critical: WRESBAL/WALCL/WSHOBL only print Wednesdays, while
@@ -369,7 +375,16 @@ def _classify_strength(
     delta_norm = cur_norm - base_norm
 
     if cur_norm < -0.15:
-        return ("[red]regime break — flipped[/red]", "flipped")
+        # "Flipped" should mean a genuine transition: baseline was correctly
+        # signed (in the expected direction) and current has reversed. If
+        # baseline was ALREADY wrong-signed (base_norm below the same
+        # threshold), nothing just "broke" — it's a persistent inversion, not
+        # a new regime break. Without this check, two wrong-signed prints of
+        # similar magnitude (e.g. +0.15 -> +0.19 when negative is expected)
+        # get mislabeled "regime break" even though delta_norm ~ 0.
+        if base_norm >= 0.15:
+            return ("[red]regime break — flipped[/red]", "flipped")
+        return ("[red]decoupled — broken[/red]", "broken")
     if cur_norm < 0.15:
         return ("[red]decoupled — broken[/red]", "broken")
     if delta_norm > 0.15:
@@ -421,6 +436,17 @@ def compute_pair_correlations(
         }.get(status)
         interpretation = meta.get(interp_key) if interp_key else None
 
+        # Effective sample size: several inputs (WRESBAL, WALCL, WSHOBL, and
+        # any d_* change column) only update weekly and are forward-filled to
+        # a daily grid. A "60-day rolling correlation" on those is really
+        # ~12 independent weekly prints wearing a 60-observation costume —
+        # correlations look precise but carry far less statistical power than
+        # the window size implies. n_eff = distinct values of the sparser
+        # series inside the window is a data-driven proxy for the real
+        # degrees of freedom, without hardcoding which columns are weekly.
+        n_eff = int(min(sx.tail(window).nunique(), sy.tail(window).nunique()))
+        thin_sample = n_eff < 20
+
         results.append({
             **meta,
             "current": current,
@@ -429,8 +455,38 @@ def compute_pair_correlations(
             "label": label,
             "status": status,
             "interpretation": interpretation,
+            "n_eff": n_eff,
+            "thin_sample": thin_sample,
         })
     return results
+
+
+def _scan_lags(
+    sx: pd.Series,
+    sy: pd.Series,
+    *,
+    window: int,
+    max_lag_days: int,
+    end: int | None = None,
+) -> tuple[list[tuple[int, float | None]], int, float]:
+    """
+    Search lag in [0, max_lag_days] for the lag that maximizes |correlation|
+    of sx.shift(lag) vs sy, evaluated at row `end` (default: last row).
+    x leads y by `lag` days. Returns (full curve, best_lag, best_corr).
+    """
+    sub_x = sx if end is None else sx.iloc[:end]
+    sub_y = sy if end is None else sy.iloc[:end]
+    curve: list[tuple[int, float | None]] = []
+    best_lag, best_corr = 0, 0.0
+    for lag in range(max_lag_days + 1):
+        shifted = sub_x.shift(lag)
+        c = shifted.rolling(window).corr(sub_y).iloc[-1] if len(sub_x) > window + lag else None
+        c_val = float(c) if c is not None and pd.notna(c) else None
+        curve.append((lag, c_val))
+        if c_val is not None and abs(c_val) > abs(best_corr):
+            best_corr = c_val
+            best_lag = lag
+    return curve, best_lag, best_corr
 
 
 def compute_lead_lag(
@@ -439,11 +495,29 @@ def compute_lead_lag(
     window: int = 60,
     max_lag_days: int = 15,
     lag_pairs: list[dict] | None = None,
+    stability_probe_days: int = 21,
 ) -> list[dict]:
     """
     For each entry in `lag_pairs` (default LAG_PAIRS), search lag in
     [0, max_lag_days] for the lag that maximizes |correlation| and report it.
     x leads y by `lag` days.
+
+    Also reports, per pair:
+      - lag_curve: the full (lag, corr) scan, not just the argmax — a single
+        max-|corr| pick over many lags on a short window overfits easily;
+        the curve lets a caller judge whether the max is a clean peak or
+        noise (see n_eff / unstable below).
+      - n_eff: effective independent observations backing the CURRENT
+        window's correlation. Change-pairs (d_*) and any weekly H.4.1-backed
+        level (reserves_b/walcl_b/bills_b) are forward-filled from a weekly
+        print, so a "60-day window" is often only ~12 independent data
+        points, not 60 — n_eff surfaces the real count.
+      - unstable: whether the best lag found `stability_probe_days` trading
+        days ago materially disagrees (sign flip, or lag moved by more than
+        ~40% of the search range) with today's best lag. A relationship
+        whose "best lag" jumps around month to month on the same search is
+        noise, not a tradeable lead-lag edge, however large a single
+        snapshot's |corr| looks.
     """
     results: list[dict] = []
     if df.empty:
@@ -456,16 +530,7 @@ def compute_lead_lag(
         sx = pd.to_numeric(df[x], errors="coerce")
         sy = pd.to_numeric(df[y], errors="coerce")
 
-        best_lag = 0
-        best_corr = 0.0
-        for lag in range(max_lag_days + 1):
-            shifted = sx.shift(lag)
-            c = shifted.rolling(window).corr(sy).iloc[-1] if len(sx) > window + lag else None
-            if c is None or pd.isna(c):
-                continue
-            if abs(c) > abs(best_corr):
-                best_corr = float(c)
-                best_lag = lag
+        lag_curve, best_lag, best_corr = _scan_lags(sx, sy, window=window, max_lag_days=max_lag_days)
 
         if best_lag == 0 and abs(best_corr) < 0.1:
             continue  # no meaningful relationship found
@@ -479,13 +544,46 @@ def compute_lead_lag(
             (best_corr < 0 and meta["expected_sign"] == "negative")
         )
 
+        n_eff = int(min(sx.tail(window).nunique(), sy.tail(window).nunique()))
+
+        # Stability probe: same scan, evaluated `stability_probe_days` ago.
+        unstable = False
+        prior_best_lag: int | None = None
+        prior_best_corr: float | None = None
+        probe_end = len(sx) - stability_probe_days
+        if probe_end > window + max_lag_days:
+            _, prior_best_lag, prior_best_corr = _scan_lags(
+                sx, sy, window=window, max_lag_days=max_lag_days, end=probe_end
+            )
+            sign_flip = (best_corr > 0) != (prior_best_corr > 0)
+            lag_jump = abs(best_lag - prior_best_lag) > max(10, max_lag_days * 0.4)
+            unstable = sign_flip or lag_jump
+
+        # A lag of 0 (contemporaneous) or a sign that fights the thesis is
+        # informative but not a leading indicator — keep it out of the
+        # tradeable bucket explicitly rather than lumping it with "too weak".
+        diagnostic_only = best_lag == 0 or not sign_matches
+
         results.append({
             **meta,
             "best_lag": best_lag,
             "best_corr": best_corr,
             "contemp_corr": contemp_v,
             "sign_matches": sign_matches,
-            "tradeable": abs(best_corr) > 0.30 and sign_matches and best_lag >= 3,
+            "lag_curve": lag_curve,
+            "n_eff": n_eff,
+            "thin_sample": n_eff < 20,
+            "unstable": unstable,
+            "prior_best_lag": prior_best_lag,
+            "prior_best_corr": prior_best_corr,
+            "diagnostic_only": diagnostic_only,
+            "tradeable": (
+                abs(best_corr) > 0.30
+                and sign_matches
+                and best_lag >= 3
+                and n_eff >= 20
+                and not unstable
+            ),
         })
     return results
 

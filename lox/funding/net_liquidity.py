@@ -1,32 +1,41 @@
 """
-Net liquidity composite: bank reserves − TGA − ON RRP.
+Net liquidity composite: Fed balance sheet − TGA − ON RRP.
 
-Lives in the funding regime because two of three legs (reserves, RRP) are Fed
-balance-sheet primitives. TGA is imported from lox.gov.dts since the Treasury
-General Account is a fiscal-authority lever — the dependency runs one-way
-(funding ← gov), mirroring the Fed/Treasury institutional separation.
+The Howell/Bianco definition — WALCL minus TGA minus ON RRP — not bank
+reserves (WRESBAL) minus TGA minus RRP. Reserves already net out most of
+TGA/RRP's balance-sheet impact (WRESBAL = WALCL − TGA − RRP − currency −
+other Fed liabilities, roughly), so "reserves − TGA − RRP" double-subtracts
+those two legs and produces a series that: (a) reads ~$4T below the commonly
+quoted net-liquidity level, and (b) has ~zero historical correlation to the
+standard WALCL-based series it's meant to approximate. Use WALCL here so this
+composite is the same "net liquidity" figure the Howell/Bianco literature
+(and lox.funding.correlations' equity-transmission pairs) refers to.
 
-Pure ΔTGA in isolation can be noisy. The net-liquidity series — Fed bank reserves
-minus TGA minus ON RRP — has stronger documented co-movement with risk-asset
-returns at a 1-2 week lag, because it captures the *net* reserve impact of all
-three plumbing flows:
+Lives in the funding regime because two of three legs (Fed balance sheet,
+RRP) are Fed balance-sheet primitives. TGA is imported from lox.gov.dts since
+the Treasury General Account is a fiscal-authority lever — the dependency
+runs one-way (funding ← gov), mirroring the Fed/Treasury institutional
+separation.
+
+Pure ΔTGA in isolation can be noisy. The net-liquidity series captures the
+*net* reserve impact of all three plumbing flows:
 
     rising TGA      → reserves drain (bearish liquidity)
     rising ON RRP   → reserves drain (bearish liquidity)
-    rising reserves → reserves add (bullish liquidity)
+    rising WALCL    → reserves add (bullish liquidity)
 
 Sources:
-    TGA       — DTS daily (lox.gov.dts.fetch_tga_daily) in $B
-    ON RRP    — FRED RRPONTSYD, daily, $B
-    Reserves  — FRED WRESBAL, weekly (Wed close), $M (we convert to $B)
+    TGA     — DTS daily (lox.gov.dts.fetch_tga_daily) in $B
+    ON RRP  — FRED RRPONTSYD, daily, $B
+    WALCL   — FRED WALCL, weekly (Wed close), $M (we convert to $B)
 
-The series are aligned on a daily business-day index; weekly reserves are
+The series are aligned on a daily business-day index; weekly WALCL is
 forward-filled to the latest TGA/RRP date so the composite isn't gated by
 the slowest series.
 
 Public API:
     fetch_net_liquidity_components(refresh=False) -> pd.DataFrame
-        columns: date, tga_b, rrp_b, reserves_b, net_liq_t
+        columns: date, tga_b, rrp_b, walcl_b, net_liq_t
 
     compute_net_liquidity_metrics(refresh=False) -> dict
 """
@@ -41,8 +50,8 @@ from lox.data.fred import FredClient
 from lox.gov.dts import fetch_tga_daily
 
 
-_RRP_SERIES = "RRPONTSYD"     # daily, billions of $
-_RESERVES_SERIES = "WRESBAL"  # weekly, millions of $
+_RRP_SERIES = "RRPONTSYD"  # daily, billions of $
+_WALCL_SERIES = "WALCL"    # weekly, millions of $
 
 
 def fetch_net_liquidity_components(
@@ -51,14 +60,14 @@ def fetch_net_liquidity_components(
     start_date: str = "2018-01-01",
 ) -> pd.DataFrame:
     """
-    Daily-aligned series of (TGA, RRP, reserves) and net liquidity in $T.
+    Daily-aligned series of (TGA, RRP, WALCL) and net liquidity in $T.
 
     Returns empty DataFrame if any source fetch fails outright; the gov panel
     code degrades gracefully on empty.
     """
     settings = load_settings()
     if not settings.FRED_API_KEY:
-        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "reserves_b", "net_liq_t"])
+        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "walcl_b", "net_liq_t"])
 
     fred = FredClient(api_key=settings.FRED_API_KEY)
 
@@ -73,12 +82,12 @@ def fetch_net_liquidity_components(
         rrp = pd.DataFrame(columns=["date", "value"])
 
     try:
-        reserves = fred.fetch_series(series_id=_RESERVES_SERIES, start_date=start_date, refresh=refresh)
+        walcl = fred.fetch_series(series_id=_WALCL_SERIES, start_date=start_date, refresh=refresh)
     except Exception:
-        reserves = pd.DataFrame(columns=["date", "value"])
+        walcl = pd.DataFrame(columns=["date", "value"])
 
-    if tga.empty and rrp.empty and reserves.empty:
-        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "reserves_b", "net_liq_t"])
+    if tga.empty and rrp.empty and walcl.empty:
+        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "walcl_b", "net_liq_t"])
 
     frames = []
     if not tga.empty:
@@ -89,11 +98,11 @@ def fetch_net_liquidity_components(
         r = rrp.copy()
         r["date"] = pd.to_datetime(r["date"])
         frames.append(r.rename(columns={"value": "rrp_b"})[["date", "rrp_b"]])
-    if not reserves.empty:
-        w = reserves.copy()
+    if not walcl.empty:
+        w = walcl.copy()
         w["date"] = pd.to_datetime(w["date"])
-        w["reserves_b"] = pd.to_numeric(w["value"], errors="coerce") / 1000.0
-        frames.append(w[["date", "reserves_b"]])
+        w["walcl_b"] = pd.to_numeric(w["value"], errors="coerce") / 1000.0
+        frames.append(w[["date", "walcl_b"]])
 
     merged = frames[0]
     for f in frames[1:]:
@@ -101,24 +110,24 @@ def fetch_net_liquidity_components(
     merged = merged.sort_values("date").reset_index(drop=True)
 
     # Build a business-day index spanning the union, forward-fill weekly
-    # reserves so the composite isn't lagged by them. Don't ffill TGA/RRP
+    # WALCL so the composite isn't lagged by it. Don't ffill TGA/RRP
     # past their last observation — if today is Saturday and TGA last printed
     # Friday, we want today's row dropped, not stale.
     bidx = pd.bdate_range(start=merged["date"].min(), end=merged["date"].max())
     merged = merged.set_index("date").reindex(bidx)
     merged.index.name = "date"
 
-    if "reserves_b" in merged.columns:
-        merged["reserves_b"] = merged["reserves_b"].ffill()
+    if "walcl_b" in merged.columns:
+        merged["walcl_b"] = merged["walcl_b"].ffill()
 
-    merged = merged.dropna(subset=["tga_b", "rrp_b", "reserves_b"])
+    merged = merged.dropna(subset=["tga_b", "rrp_b", "walcl_b"])
     if merged.empty:
-        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "reserves_b", "net_liq_t"])
+        return pd.DataFrame(columns=["date", "tga_b", "rrp_b", "walcl_b", "net_liq_t"])
 
-    merged["net_liq_t"] = (merged["reserves_b"] - merged["tga_b"] - merged["rrp_b"]) / 1000.0
+    merged["net_liq_t"] = (merged["walcl_b"] - merged["tga_b"] - merged["rrp_b"]) / 1000.0
     out = merged.reset_index()
     out["date"] = out["date"].dt.date
-    return out[["date", "tga_b", "rrp_b", "reserves_b", "net_liq_t"]]
+    return out[["date", "tga_b", "rrp_b", "walcl_b", "net_liq_t"]]
 
 
 def compute_net_liquidity_metrics(*, refresh: bool = False) -> dict:
@@ -165,6 +174,6 @@ def compute_net_liquidity_metrics(*, refresh: bool = False) -> dict:
         "components_b": {
             "tga_b": float(last["tga_b"]),
             "rrp_b": float(last["rrp_b"]),
-            "reserves_b": float(last["reserves_b"]),
+            "walcl_b": float(last["walcl_b"]),
         },
     }

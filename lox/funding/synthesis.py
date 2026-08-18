@@ -49,6 +49,20 @@ class FundingBrief:
     offshore_label: Optional[str] = None     # "watch" | "stress" | "crisis" when shown
     offshore_drivers: list[str] = field(default_factory=list)
     offshore_score: Optional[float] = None
+    # Confidence in the regime call itself: how many plumbing pillars agree.
+    confidence: str = "moderate"          # "high" | "moderate" | "low"
+    confidence_note: str = ""
+    # Structural risks building but not yet visible in the SOFR-IORB print —
+    # separate from broken_couplings, which are already showing in the data.
+    forward_risk_flags: list[str] = field(default_factory=list)
+    # Explicit forward statement: does the current net-liquidity trend, run
+    # through the active lead-lag relationship, point to SPX pressure over
+    # the next ~N trading days. None when there's not enough to say anything.
+    equity_translation: Optional[str] = None
+    # Lead-lag reads that are contemporaneous, wrong-signed, or too thin a
+    # sample to trust — diagnostic only, explicitly called out so they don't
+    # get mistaken for tripwires.
+    diagnostic_notes: list[str] = field(default_factory=list)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -244,6 +258,191 @@ def _collect_broken_couplings(corr_rep: dict, *, min_delta: float = 0.20) -> lis
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Confidence — how many pillars agree, how thin the lead-lag evidence is
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _assess_confidence(corr_rep: dict) -> tuple[str, str]:
+    """
+    Confidence in the regime call: fraction of plumbing pillars pointing the
+    same (expected) direction, discounted when no lead-lag relationship
+    clears the tradeable bar (n_eff >= 20, stable across a stability probe,
+    not contemporaneous/wrong-signed — see compute_lead_lag).
+    """
+    pairs = corr_rep.get("pairs") or []
+    total = len(pairs)
+    agreeing = sum(1 for p in pairs if p.get("status") in ("strong", "normal"))
+
+    all_lags = (corr_rep.get("lags") or []) + (corr_rep.get("equity_lags") or [])
+    total_lags = len(all_lags)
+    tradeable_lags = sum(1 for l in all_lags if l.get("tradeable"))
+
+    if total == 0:
+        return "low", "no plumbing pairs available"
+
+    agree_frac = agreeing / total
+    if agree_frac >= 0.75 and tradeable_lags >= 1:
+        confidence = "high"
+    elif agree_frac >= 0.5:
+        confidence = "moderate"
+    else:
+        confidence = "low"
+
+    note = f"{agreeing}/{total} plumbing pillars agree"
+    if total_lags:
+        note += f"; {tradeable_lags}/{total_lags} lead-lag reads clear the tradeable bar"
+    else:
+        note += "; no lead-lag reads available"
+    return confidence, note
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Forward risk flags — structural changes not yet in the SOFR-IORB print
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_forward_risk_flags(fi, corr_rep: dict) -> list[str]:
+    """
+    Structural degradation that's building but hasn't shown up as a broken
+    coupling yet — distinct from broken_couplings, which are already visible
+    in the correlation data. This is a forward warning, not a current read.
+    """
+    flags: list[str] = []
+    by_name = {p["name"]: p for p in (corr_rep.get("pairs") or [])}
+
+    rrp_b = fi.on_rrp_usd_bn
+    rrp_bn = float(rrp_b) / 1000.0 if isinstance(rrp_b, (int, float)) else None
+    rrp_chg_13w = getattr(fi, "on_rrp_chg_13w", None)
+    rrp_pair = by_name.get("SOFR-IORB ↔ ON RRP")
+    rrp_pair_intact = rrp_pair is not None and rrp_pair.get("status") not in ("broken", "flipped")
+
+    if rrp_bn is not None and rrp_bn < 150 and rrp_pair_intact:
+        flags.append(
+            f"RRP buffer thin (${rrp_bn:.0f}B) but SOFR-IORB↔RRP coupling still "
+            f"'{rrp_pair['status']}' — cushion degradation not yet visible in the corridor print."
+        )
+    if (
+        isinstance(rrp_chg_13w, (int, float)) and rrp_chg_13w < -100_000
+        and rrp_bn is not None and rrp_bn >= 150
+    ):
+        flags.append(
+            f"RRP draining fast (-${abs(rrp_chg_13w) / 1000:.0f}B/13w, still ${rrp_bn:.0f}B) — "
+            f"buffer erosion building toward depletion, not a stress signal yet."
+        )
+
+    reserves_b = fi.bank_reserves_usd_bn
+    reserves_t = float(reserves_b) / 1_000_000.0 if isinstance(reserves_b, (int, float)) else None
+    reserves_chg_13w = getattr(fi, "bank_reserves_chg_13w", None)
+    if (
+        reserves_t is not None and 3.0 <= reserves_t < 3.3
+        and isinstance(reserves_chg_13w, (int, float)) and reserves_chg_13w < -30_000
+    ):
+        flags.append(
+            f"Reserves approaching scarcity (${reserves_t:.2f}T, -${abs(reserves_chg_13w) / 1000:.0f}B/13w) — "
+            f"not yet binding, but the runway to LCLoR is short."
+        )
+
+    return flags
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Equity translation — the missing directional call on the Howell channel
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_equity_translation(corr_rep: dict, nl_metrics: dict | None) -> Optional[str]:
+    """
+    State explicitly whether the current net-liquidity trend, run through the
+    ΔNet Liquidity → ΔSPX lead-lag read, points to SPX pressure over the next
+    ~N trading days — the piece the raw correlation tables never state on
+    their own. Always states the number; downgrades to LOW CONFIDENCE with
+    the specific reason (thin sample, unstable lag, wrong sign, contemporaneous)
+    rather than omitting a shaky read outright.
+    """
+    if not nl_metrics:
+        return None
+    d30 = nl_metrics.get("delta_30d_b")
+    if not isinstance(d30, (int, float)):
+        return None
+
+    nl_lag = next(
+        (l for l in (corr_rep.get("equity_lags") or []) if l.get("name") == "ΔNet Liquidity → ΔSPX"),
+        None,
+    )
+    if not nl_lag:
+        return None
+    lag = nl_lag.get("best_lag")
+    corr = nl_lag.get("best_corr")
+    if lag is None or corr is None:
+        return None
+
+    if d30 == 0:
+        return "Net liquidity ~flat over 30d — no directional read on the Howell channel right now."
+
+    trend_dir = 1 if d30 > 0 else -1
+    corr_dir = 1 if corr > 0 else -1
+    forecast_dir = trend_dir * corr_dir
+    direction_word = "bullish" if forecast_dir > 0 else "bearish"
+    trend_word = "rising" if trend_dir > 0 else "falling"
+
+    line = (
+        f"Net liquidity {trend_word} ({'+' if d30 > 0 else '-'}${abs(d30):.0f}B/30d). "
+        f"At the active {lag}-day-lead read (corr {corr:+.2f}), this points {direction_word} "
+        f"for SPX over the next ~{lag} trading days."
+    )
+
+    if nl_lag.get("tradeable"):
+        return line
+
+    reasons = []
+    n_eff = nl_lag.get("n_eff")
+    if isinstance(n_eff, int) and n_eff < 20:
+        reasons.append(f"n_eff={n_eff} (only ~{n_eff} independent weekly prints back this window, not 60)")
+    if nl_lag.get("unstable"):
+        prior_lag = nl_lag.get("prior_best_lag")
+        if prior_lag is not None:
+            reasons.append(f"best lag unstable — was {prior_lag}d a month ago, now {lag}d")
+        else:
+            reasons.append("best lag unstable across recent windows")
+    if not nl_lag.get("sign_matches", True):
+        reasons.append("sign fights the Howell/Bianco thesis")
+    if lag == 0:
+        reasons.append("contemporaneous, not a lead")
+    reason_str = "; ".join(reasons) if reasons else "below the tradeable bar"
+    return line + f" LOW CONFIDENCE — {reason_str}. Diagnostic only; do not size off this alone."
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data quality caveats — contemporaneous / wrong-signed / thin-sample reads
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_diagnostic_notes(corr_rep: dict) -> list[str]:
+    """
+    Flag lead-lag reads that are contemporaneous (0-day lag) or wrong-signed
+    as diagnostic only — they describe what's co-moving right now, not what's
+    about to happen — plus a rollup of thin-sample pair correlations so a
+    weekly-cadence artifact doesn't get read as a precise daily signal.
+    """
+    notes: list[str] = []
+    all_lags = (corr_rep.get("lags") or []) + (corr_rep.get("equity_lags") or [])
+    for l in all_lags:
+        if not l.get("diagnostic_only"):
+            continue
+        reason = "contemporaneous (0-day lag)" if l.get("best_lag") == 0 else "wrong-signed vs. thesis"
+        notes.append(f"{l['name']}: {reason} — diagnostic only, not predictive.")
+
+    thin_pairs = [
+        p for p in (corr_rep.get("pairs") or []) + (corr_rep.get("equity_pairs") or [])
+        if p.get("thin_sample")
+    ]
+    if thin_pairs:
+        names = ", ".join(p["name"] for p in thin_pairs[:4])
+        more = f" (+{len(thin_pairs) - 4} more)" if len(thin_pairs) > 4 else ""
+        notes.append(
+            f"Thin-sample correlations (n_eff<20 — weekly-cadence data forward-filled into a "
+            f"60d window overstates precision): {names}{more}."
+        )
+    return notes
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Trade ideas — rule table mapping active signals → expressions
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -386,6 +585,11 @@ def build_funding_brief(
     ideas = _build_trade_ideas(fi, regime, corr_rep, cross_scores, active, all_eq_broken)
     notes = _build_context_notes(corr_rep, cross_scores)
 
+    confidence, confidence_note = _assess_confidence(corr_rep)
+    forward_risk_flags = _build_forward_risk_flags(fi, corr_rep)
+    equity_translation = _build_equity_translation(corr_rep, nl_metrics)
+    diagnostic_notes = _build_diagnostic_notes(corr_rep)
+
     # Offshore USD stress — fold into the brief.
     offshore_label = None
     offshore_drivers: list[str] = []
@@ -445,4 +649,9 @@ def build_funding_brief(
         offshore_label=offshore_label,
         offshore_drivers=offshore_drivers,
         offshore_score=offshore_score,
+        confidence=confidence,
+        confidence_note=confidence_note,
+        forward_risk_flags=forward_risk_flags,
+        equity_translation=equity_translation,
+        diagnostic_notes=diagnostic_notes,
     )

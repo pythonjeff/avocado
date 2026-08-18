@@ -23,10 +23,10 @@ class _FakeFred:
         idx = pd.bdate_range("2026-04-01", periods=22, freq="B")
         if series_id == "RRPONTSYD":
             return pd.DataFrame({"date": idx, "value": [10.0] * 22})
-        if series_id == "WRESBAL":
+        if series_id == "WALCL":
             # weekly Wed-only series, in $millions
             wed_idx = pd.date_range("2026-04-01", periods=5, freq="W-WED")
-            return pd.DataFrame({"date": wed_idx, "value": [3_000_000.0 + i * 5_000 for i in range(5)]})
+            return pd.DataFrame({"date": wed_idx, "value": [7_000_000.0 + i * 5_000 for i in range(5)]})
         raise ValueError(f"unexpected series {series_id}")
 
 
@@ -44,8 +44,8 @@ def test_compute_net_liquidity_metrics_shapes(monkeypatch):
     assert isinstance(m["delta_5d_b"], float)
     assert isinstance(m["delta_30d_b"], float)
     comps = m["components_b"]
-    assert set(comps.keys()) == {"tga_b", "rrp_b", "reserves_b"}
-    # net = (reserves - tga - rrp); rising TGA + steady RRP + slow-moving reserves
+    assert set(comps.keys()) == {"tga_b", "rrp_b", "walcl_b"}
+    # net = (walcl - tga - rrp); rising TGA + steady RRP + slow-moving WALCL
     # → composite should be falling over the window
     assert m["delta_30d_b"] < 0
     series = m["series_30d_t"]
